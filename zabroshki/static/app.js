@@ -144,6 +144,14 @@ async function startSearch() {
   const areaId = $('#areaSelect').value || null;
   const name = areaId ? $('#areaSelect').selectedOptions[0].textContent : null;
   try {
+    const info = await api('/api/area_info', { method: 'POST', body: { geojson: gj } });
+    if ($('#optImagery').checked && info.scan_tiles > 20000) {
+      const hours = (info.scan_tiles / 8 / 3600).toFixed(1);
+      if (!confirm(`Область большая: ${info.area_km2} км², ~${info.scan_tiles} тайлов z${info.scan_zoom}.\n` +
+        `Первое скачивание снимков займёт ~${hours} ч (повторно — из кэша). Продолжить?`)) return;
+    }
+  } catch (e) { /* ignore, start anyway */ }
+  try {
     const r = await api('/api/search', { method: 'POST', body: { geojson: gj, area_id: areaId, name, options: searchOptions() } });
     S.runId = r.run_id;
     await loadRuns(r.run_id);
@@ -160,7 +168,7 @@ function startPolling() {
     try { j = await api('/api/job'); } catch (e) { return; }
     renderJob(j);
     const active = ['running', 'paused', 'pending'].includes(j.state);
-    if (active && tick % 8 === 0 && j.run_id && j.run_id === S.runId) loadCandidates();
+    if (active && tick % 15 === 0 && j.run_id && j.run_id === S.runId) loadCandidates();
     if (!active) {
       clearInterval(S.polling); S.polling = null;
       if (S.lastJobState !== j.state) { if (j.run_id) { await loadRuns(j.run_id); } loadModelInfo(); }
@@ -332,6 +340,7 @@ function renderDetail(d) {
     <div class="muted small" id="lblHint">${S.labelsSinceTrain ? `Новых отметок: ${S.labelsSinceTrain}. Чтобы учесть их в ранжировании — вкладка «Модель» → «Дообучить и пересчитать».` : 'Отметки сохраняются и используются для дообучения.'}</div>
     <h4>Почему такой балл</h4>
     <ul class="reasons">${reasonRows(d.reasons)}</ul>
+    ${(d.reasons || []).some((r) => / \*$/.test(r.text)) ? '<div class="muted small">* вклад уменьшен: похожие признаки (несколько нейросетей, «много зелени») не суммируются полностью</div>' : ''}
     <h4>Статус охраны: ${GUARD_NAMES[d.guard] || d.guard}</h4>
     <ul class="reasons">${reasonRows(d.guard_reasons)}</ul>
     ${years ? `<h4>Снимки по годам (Esri Wayback)</h4><div class="years">${years}</div>` : ''}

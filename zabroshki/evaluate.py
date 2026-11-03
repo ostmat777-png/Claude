@@ -15,7 +15,7 @@ from . import db, osm, scoring
 from .config import DATA_DIR
 from .geo import area_from_geojson
 from .pipeline import load_candidates
-from .training import _fit, _near, build_training_points, load_meta_weights, read_positives, save_eval
+from .training import _fit, build_training_points, load_meta_weights, read_positives, save_eval
 
 MATCH_M = 40.0
 

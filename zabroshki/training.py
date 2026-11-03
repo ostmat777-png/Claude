@@ -12,7 +12,7 @@ import time
 import numpy as np
 
 from . import db, osm, scoring
-from .config import EXAMPLES_DIR, settings
+from .config import EXAMPLES_DIR
 
 log = logging.getLogger(__name__)
 POS_CSV = EXAMPLES_DIR / "positives.csv"
@@ -347,7 +347,6 @@ def retrain(job, pool, opts):
     provider = metaA.get("provider", opts.get("imagery_provider", "esri"))
     z = metaA.get("z", opts.get("scan_zoom", 17))
     if torch_available():
-        from .imagery import embed_points_A
 
         class _S:  # minimal scan-like adapter around stored embeddings
             use_models = True

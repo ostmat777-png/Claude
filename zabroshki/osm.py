@@ -8,7 +8,7 @@ import math
 import time
 from dataclasses import dataclass, field
 
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import linemerge, polygonize, unary_union
 
 from . import db, net

@@ -8,7 +8,7 @@ import re
 import numpy as np
 
 from . import db, net, tiles
-from .geo import TILE, lonlat_to_pixel, lonlat_to_tile, meters_per_pixel
+from .geo import lonlat_to_tile, meters_per_pixel
 
 log = logging.getLogger(__name__)
 CONFIG_URL = "https://s3-us-west-2.amazonaws.com/config.maptiles.arcgis.com/waybackconfig.json"

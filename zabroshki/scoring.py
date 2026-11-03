@@ -193,7 +193,7 @@ def score(c, weights=None) -> tuple[float, list]:
                 for k in members:
                     if k in contrib and contrib[k] * sign > 0:
                         contrib[k] *= k_scale
-                        notes[k] = " (сумма коррелирующих признаков ограничена)"
+                        notes[k] = " *"
     z = W["bias"] + sum(contrib.values())
     reasons = []
     for name, (val, text) in x.items():

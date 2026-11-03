@@ -8,7 +8,7 @@ os.environ.setdefault("ZABROSHKI_DATA", tempfile.mkdtemp())
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
-from shapely.geometry import Point, Polygon, box  # noqa: E402
+from shapely.geometry import LineString, box  # noqa: E402
 
 from zabroshki import candidates as C  # noqa: E402
 from zabroshki import osm, scoring, vlm, wayback  # noqa: E402
@@ -54,7 +54,7 @@ def test_lifecycle_tags():
 
 
 def test_dead_ends():
-    a = (LineString := __import__("shapely.geometry", fromlist=["LineString"]).LineString)
+    a = LineString
     hw = [(a([(0, 0), (1, 0)]), {"highway": "track"}, "w1"), (a([(1, 0), (2, 0)]), {"highway": "residential"}, "w2")]
     ends = osm.find_dead_ends(hw)
     assert len(ends) == 1 and ends[0][0].x == 0
