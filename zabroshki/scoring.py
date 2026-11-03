@@ -16,21 +16,21 @@ DEFAULT_WEIGHTS = {
     "farm": 0.6,
     "industrial": 0.3,
     "unmapped": 0.3,
-    "far_from_roads": 0.5,
+    "far_from_roads": 0.3,
     "minor_access": 0.3,
-    "dead_end": 0.4,
+    "dead_end": 0.3,
     "road_abandoned": 0.6,
-    "isolated": 0.3,
+    "isolated": 0.8,
     "active_neighbours": -0.8,
-    "forest": 1.0,
+    "forest": 0.85,
     "overgrowth": 0.35,
-    "tree_on_roof": 1.0,
-    "bprob_low": 0.6,
+    "tree_on_roof": 0.7,
+    "bprob_low": 0.3,
     "clearing": 0.5,
-    "no_paths": 0.4,
+    "no_paths": 0.15,
     "road_overgrown": 0.7,
     "image_detected": 0.3,
-    "clfA": 0.45,
+    "clfA": 0.8,
     "zs": 0.3,
     "zs_cars": -0.8,
     "clfB": 0.45,
@@ -41,6 +41,8 @@ DEFAULT_WEIGHTS = {
     "kind_deadend": -0.6,
     "kind_clearing": -1.0,
     "zs_nobuilding": -1.5,
+    "ms_unconfirmed": -1.0,
+    "tiny": -0.5,
 }
 
 # Evidence that is meaningless (tautological or out-of-distribution) for candidates that are not a known building:
@@ -131,7 +133,8 @@ def feature_vector(c) -> dict:
     if f.get("image_detected") and "OSM" not in c["sources"]:
         b = f.get("bprob") or 0.75
         x["image_detected"] = (_clip((b - 0.7) / 0.3, 0.2, 1), f"Постройка распознана на снимке (детектор {b:.2f})")
-    if c.get("footprint") is None and f.get("zs_nobuilding") is not None and f["zs_nobuilding"] >= 0.5:
+    if c.get("footprint") is None and f.get("image_detected") and "OSM" not in c["sources"] \
+            and f.get("zs_nobuilding") is not None and f["zs_nobuilding"] >= 0.5:
         x["zs_nobuilding"] = (_clip((f["zs_nobuilding"] - 0.5) / 0.4, 0, 1),
                               f"SigLIP: на снимке z18 скорее нет постройки ({f['zs_nobuilding']:.2f})")
     if f.get("pA") is not None and f.get("pA_trained"):
@@ -169,7 +172,16 @@ def feature_vector(c) -> dict:
         b = f.get("bprob") or 0
         x["kind_clearing"] = (1.0 if b < 0.5 else 0.4, "Только прогалина (постройка не подтверждена)"
                               if b < 0.5 else f"Прогалина, на снимке похоже на остатки постройки (детектор {b:.2f})")
-    known_building = c.get("footprint") is not None or lc > 0
+    # Microsoft ML footprints have false positives on forest canopy: if our own building detector does not
+    # see a building there, treat it as unconfirmed (classifiers would read the canopy as "overgrown ruin").
+    ms_only = c.get("footprint") is not None and "OSM" not in c["sources"] and "MS Footprints" in c["sources"]
+    unconfirmed = ms_only and f.get("detector_ok") and (f.get("bprob") or 0) < 0.3 and lc == 0
+    if unconfirmed:
+        x["ms_unconfirmed"] = (1.0, "Контур Microsoft не подтверждён детектором зданий на снимке "
+                                    f"({(f.get('bprob') or 0):.2f}) — возможно, это кроны деревьев")
+    if ms_only and (f.get("area_m2") or 99) < 12 and lc == 0:
+        x["tiny"] = (1.0, f"Очень маленький контур ({f.get('area_m2'):.0f} м²) — сарай или ошибка распознавания")
+    known_building = (c.get("footprint") is not None and not unconfirmed) or lc > 0
     if not known_building:
         for k in NOT_FOR_POINTS:
             x.pop(k, None)
@@ -185,7 +197,7 @@ def _ptags(c):
 # Correlated evidence (several detectors that all react to "lots of trees", several image models)
 # must not be summed as if independent: each group's total contribution is capped.
 GROUPS = {
-    "image_models": (("clfA", "clfB", "zs", "vlm"), 2.4),
+    "image_models": (("clfA", "clfB", "zs", "vlm"), 3.0),
     "vegetation": (("forest", "overgrowth", "tree_on_roof", "bprob_low", "no_paths"), 1.8),
     "remoteness": (("outside", "far_from_roads", "minor_access", "dead_end", "isolated", "road_abandoned",
                     "road_overgrown"), 1.8),

@@ -209,7 +209,10 @@ def main(run_id=None, quiet=False):
         lines.append("| место | слепой балл | тип | объект | признаки (без OSM-тега) |")
         lines.append("|---|---|---|---|---|")
         for rk, s, c in detail[:40]:
-            _, rs = scoring.score(_strip_osm(c), weights)
+            c2 = _strip_osm(c)
+            c2["f"].pop("pB", None)
+            c2["f"].pop("pB_trained", None)
+            _, rs = scoring.score(c2, weights)
             lines.append(f"| {rk} | {s:.2f} | {c['kind']} | {c['title'] or c['key']} | "
                          f"{'; '.join(r['text'] for r in rs if r['w'] > 0)[:160]} |")
     text = "\n".join(lines)

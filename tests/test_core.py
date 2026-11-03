@@ -75,7 +75,7 @@ def test_score_monotonic_and_capped():
     c = _cand(pA=0.999, pA_trained=True, pB=0.999, pB_trained=True, zs_abandoned=0.999)
     p, reasons = scoring.score(c)
     total = sum(r["w"] for r in reasons if r["k"] in ("clfA", "clfB", "zs"))
-    assert total <= scoring.GROUPS["image_models"][1] + 1e-6
+    assert total <= scoring.GROUPS["image_models"][1] + 0.02  # reasons are rounded to 0.01
 
 
 def test_guard_rules():
