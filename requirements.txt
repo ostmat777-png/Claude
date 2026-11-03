@@ -1,0 +1,14 @@
+# PyTorch is installed separately by run.bat from the CUDA 12.8 index (Blackwell / RTX 50xx):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+numpy>=1.26
+pillow>=10.0
+shapely>=2.0
+scipy>=1.11
+scikit-learn>=1.4
+pywebview>=5.0
+transformers>=4.45
+sentencepiece>=0.2
+protobuf>=4.25

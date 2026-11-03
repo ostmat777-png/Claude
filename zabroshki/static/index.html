@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Заброшки</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/vendor/leaflet-draw/leaflet.draw.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">Заброшки</div>
+
+  <div class="seg" id="baseSeg" title="Подложка карты">
+    <button data-base="sat" class="on">Спутник</button>
+    <button data-base="hybrid">Гибрид</button>
+    <button data-base="map">Схема</button>
+  </div>
+
+  <div class="group">
+    <button id="btnRect" title="Выделить область рамкой">▭ Рамка</button>
+    <button id="btnPoly" title="Выделить область полигоном">⬠ Полигон</button>
+    <button id="btnClear" title="Убрать выделение">✕</button>
+    <span id="areaInfo" class="muted"></span>
+  </div>
+
+  <div class="group">
+    <select id="areaSelect" title="Сохранённые области"><option value="">— области —</option></select>
+    <button id="btnSaveArea" title="Сохранить выделенную область">💾</button>
+    <button id="btnDelArea" title="Удалить выбранную сохранённую область">🗑</button>
+  </div>
+
+  <div class="group">
+    <button id="btnSearch" class="primary">▶ Искать</button>
+    <button id="btnPause" disabled>⏸ Пауза</button>
+    <button id="btnCancel" disabled title="Остановить">■</button>
+  </div>
+
+  <div id="progress">
+    <div id="progressBar"><div id="progressFill"></div></div>
+    <div id="progressText" class="muted">Выделите область и нажмите «Искать»</div>
+  </div>
+</header>
+
+<main>
+  <div id="map"></div>
+  <aside id="side">
+    <nav class="tabs">
+      <button data-tab="results" class="on">Результаты</button>
+      <button data-tab="detail">Объект</button>
+      <button data-tab="model">Модель</button>
+      <button data-tab="log">Журнал</button>
+    </nav>
+
+    <section id="tab-results" class="tab on">
+      <div class="row">
+        <label class="muted">Запуск</label>
+        <select id="runSelect"></select>
+        <button id="btnDelRun" title="Удалить результаты запуска">🗑</button>
+      </div>
+      <div class="filters">
+        <div class="chips" id="colorChips">
+          <label class="chip red"><input type="checkbox" data-guard="red" checked> Охраняется <b id="cnt-red">0</b></label>
+          <label class="chip yellow"><input type="checkbox" data-guard="yellow" checked> Неясно <b id="cnt-yellow">0</b></label>
+          <label class="chip green"><input type="checkbox" data-guard="green" checked> Свободно <b id="cnt-green">0</b></label>
+        </div>
+        <div class="row">
+          <label for="scoreSlider">Балл ≥ <b id="scoreVal">0.25</b></label>
+          <input type="range" id="scoreSlider" min="0" max="1" step="0.01" value="0.25">
+        </div>
+        <details id="typeBox" open>
+          <summary>Типы объектов</summary>
+          <div id="typeChecks"></div>
+        </details>
+        <div class="row">
+          <label><input type="checkbox" id="onlyUnlabeled"> только без отметок</label>
+          <span class="muted" id="shownCount"></span>
+        </div>
+      </div>
+      <div id="list"></div>
+      <div class="export">
+        <span class="muted">Экспорт (с учётом фильтров):</span>
+        <button data-fmt="kml">KML</button>
+        <button data-fmt="geojson">GeoJSON</button>
+        <button data-fmt="csv">CSV</button>
+        <div id="exportMsg" class="muted"></div>
+      </div>
+    </section>
+
+    <section id="tab-detail" class="tab">
+      <div id="detail"><p class="muted">Кликните по маркеру на карте или по строке в списке.</p></div>
+    </section>
+
+    <section id="tab-model" class="tab">
+      <div id="modelInfo" class="muted">…</div>
+      <div class="row">
+        <button id="btnRetrain" class="primary">↻ Дообучить и пересчитать</button>
+      </div>
+      <h4>Параметры поиска</h4>
+      <div class="form" id="optForm">
+        <label><input type="checkbox" id="optImagery" checked> Сплошной скан снимков (z<span id="zScan">17</span>)</label>
+        <label><input type="checkbox" id="optFootprints" checked> Контуры зданий Microsoft</label>
+        <label><input type="checkbox" id="optModels" checked> Нейросети (DINOv2 / SigLIP)</label>
+        <label><input type="checkbox" id="optWayback" checked> Сравнение по годам (Esri Wayback)</label>
+        <label>Локальный VLM (Ollama):
+          <select id="optVlm"><option value="auto">авто</option><option value="true">вкл</option><option value="false">выкл</option></select></label>
+        <label>Точная проверка, топ-K: <input type="number" id="optTopK" min="0" step="50" value="1500"></label>
+        <label>Wayback, топ-K: <input type="number" id="optWbK" min="0" step="50" value="400"></label>
+        <label>Провайдер снимков: <select id="optProvider"></select></label>
+        <button id="btnSaveOpts">Сохранить параметры</button>
+      </div>
+      <p class="muted small">Снимки: Esri World Imagery / Wayback. Данные: © участники OpenStreetMap, Microsoft Building Footprints (ODbL).</p>
+    </section>
+
+    <section id="tab-log" class="tab">
+      <pre id="logBox"></pre>
+    </section>
+  </aside>
+</main>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/vendor/leaflet-draw/leaflet.draw.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
