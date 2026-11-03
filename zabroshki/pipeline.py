@@ -201,28 +201,40 @@ def run_search(job, run_id: int):
             stats.update(scan.stats)
             save_candidates(run_id, cands, stats=stats)
 
+        def optional(title, fn, *a, **kw):
+            """Optional refinement stages must not kill the whole search (network hiccups etc.)."""
+            from .jobs import Cancelled
+            try:
+                fn(*a, **kw)
+            except Cancelled:
+                raise
+            except Exception as ex:
+                log.exception(title)
+                job.info(f"{title}: ошибка ({type(ex).__name__}: {ex}) — этап пропущен, поиск продолжается")
+                stats.setdefault("stage_errors", []).append(title)
+
         if use_models:
             from . import stageb, training
             stage(stage_names[k])
-            training.train_and_score_A(job, cands, opts, scan)
+            optional("Классификатор A", training.train_and_score_A, job, cands, opts, scan)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
             stage(stage_names[k])
-            stageb.run(job, cands, opts)
+            optional("Точная проверка", stageb.run, job, cands, opts)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
 
         if use_wb:
             from . import wayback
             stage(stage_names[k])
-            wayback.run(job, cands, opts, scan)
+            optional("Wayback", wayback.run, job, cands, opts, scan)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
 
         if vlm_opt and use_img:
             from . import vlm
             stage(stage_names[k])
-            vlm.run(job, cands, opts, force=(vlm_opt is True))
+            optional("VLM", vlm.run, job, cands, opts, force=(vlm_opt is True))
             _rescore(cands, weights)
 
         stage(stage_names[-1])
