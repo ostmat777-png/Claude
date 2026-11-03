@@ -17,7 +17,7 @@ where uv >nul 2>nul
 if errorlevel 1 (
   echo Installing uv package manager...
   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-  set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+  set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
 )
 where uv >nul 2>nul
 if errorlevel 1 (
