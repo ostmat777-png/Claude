@@ -27,6 +27,8 @@ DEFAULT_WEIGHTS = {
     "tree_on_roof": 1.0,
     "bprob_low": 0.6,
     "clearing": 0.5,
+    "no_paths": 0.4,
+    "road_overgrown": 0.7,
     "image_detected": 0.3,
     "clfA": 0.45,
     "zs": 0.3,
@@ -104,6 +106,16 @@ def feature_vector(c) -> dict:
             and c["kind"] not in ("deadend", "clearing"):
         x["tree_on_roof"] = (_clip((f["tree_on"] - 0.15) / 0.5, 0, 1),
                              f"Растительность поверх контура здания ({f['tree_on'] * 100:.0f}%) — крыша разрушена/заросла")
+    if f.get("veg_yard") is not None and f["veg_yard"] >= 0.85 and c.get("footprint") is not None \
+            and not f.get("in_settlement") and c["kind"] not in ("deadend", "clearing"):
+        x["no_paths"] = (_clip((f["veg_yard"] - 0.85) / 0.12, 0.2, 1),
+                         f"Нет дорожек и площадок у стен: вокруг сплошная зелень ({f['veg_yard'] * 100:.0f}%)")
+    if f.get("road_tree") is not None and not f.get("in_settlement") \
+            and f.get("access_road") in ("track", "path", "bridleway", "footway", "service") \
+            and (f["road_tree"] >= 0.6 or f.get("road_veg", 0) >= 0.92):
+        v = max(_clip((f["road_tree"] - 0.6) / 0.3, 0, 1), _clip((f.get("road_veg", 0) - 0.92) / 0.08, 0, 1), 0.3)
+        x["road_overgrown"] = (v, f"Подъездная дорога ({f.get('access_road')}) заросла на снимке: деревья "
+                                  f"{f['road_tree'] * 100:.0f}%, зелень {f.get('road_veg', 0) * 100:.0f}%")
     if f.get("bprob") is not None and c.get("footprint") is not None and f.get("detector_ok"):
         b = f["bprob"]
         if b < 0.35:
@@ -158,8 +170,9 @@ def _ptags(c):
 # must not be summed as if independent: each group's total contribution is capped.
 GROUPS = {
     "image_models": (("clfA", "clfB", "zs", "vlm"), 2.4),
-    "vegetation": (("forest", "overgrowth", "tree_on_roof", "bprob_low"), 1.8),
-    "remoteness": (("outside", "far_from_roads", "minor_access", "dead_end", "isolated", "road_abandoned"), 1.8),
+    "vegetation": (("forest", "overgrowth", "tree_on_roof", "bprob_low", "no_paths"), 1.8),
+    "remoteness": (("outside", "far_from_roads", "minor_access", "dead_end", "isolated", "road_abandoned",
+                    "road_overgrown"), 1.8),
     "history": (("wb_veg", "wb_roof", "wb_change"), 2.0),
 }
 

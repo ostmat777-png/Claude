@@ -228,6 +228,18 @@ class Scanner:
         for c in new:
             c["f"].update(self.candidate_features(c))
         self.relative_overgrowth(allc + new)
+        n_rf = 0
+        for i, c in enumerate(allc + new):
+            if c["kind"] in ("deadend", "clearing"):
+                continue
+            if i % 200 == 0:
+                job.checkpoint()
+                job.progress(i, len(allc) + len(new), "Подъездные дороги на снимке")
+            rf = self.road_features(c, ctx)
+            if rf:
+                c["f"].update(rf)
+                n_rf += 1
+        self.stats["access_roads_checked"] = n_rf
         if self.use_models and new:
             self._embed_new(new)
         return new
@@ -469,6 +481,56 @@ class Scanner:
                 if vals:
                     f["bprob"] = round(float(max(vals)) / 255, 3)
         return f
+
+    def road_features(self, c, ctx):
+        """Is the nearest minor access road (track/path/service) overgrown on the image?"""
+        from shapely.geometry import Point
+        tr, geoms, items = ctx.highways
+        if tr is None:
+            return None
+        x, y = self.lp.fwd(c["lon"], c["lat"])
+        pt = Point(x, y)
+        idx = tr.query(pt, predicate="dwithin", distance=120)
+        best, bd = None, 1e9
+        for i in idx:
+            hw = items[i][1].get("highway")
+            if hw not in ("track", "path", "service", "unclassified", "bridleway", "footway"):
+                continue
+            d = geoms[i].distance(pt)
+            if d < bd:
+                best, bd = i, d
+        if best is None:
+            return None
+        seg = geoms[best].intersection(pt.buffer(min(80.0, bd + 50.0)))
+        if seg.is_empty:
+            return None
+        size = 320
+        img, valid = tiles.crop_lonlat(self.provider, self.z, c["lon"], c["lat"], size)
+        if valid < 0.6:
+            return None
+        cx, cy = lonlat_to_pixel(c["lon"], c["lat"], self.z)
+        m = Image.new("L", (size, size), 0)
+        d = ImageDraw.Draw(m)
+        width = max(3, int(round(3.5 / self.mpp)))
+        lines = seg.geoms if hasattr(seg, "geoms") else [seg]
+        for ln in lines:
+            if ln.geom_type != "LineString":
+                continue
+            pts = []
+            for xx, yy in ln.coords:
+                lon, lat = self.lp.inv(xx, yy)
+                px, py = lonlat_to_pixel(lon, lat, self.z)
+                pts.append((px - cx + size / 2, py - cy + size / 2))
+            if len(pts) >= 2:
+                d.line(pts, fill=255, width=width)
+        mask = np.asarray(m) > 0
+        if mask.sum() < 20:
+            return None
+        veg, tree, lum, snow = veg_tree_masks(img)
+        if snow > 0.3:
+            return None
+        return {"road_tree": round(float(tree[mask].mean()), 3), "road_veg": round(float(veg[mask].mean()), 3),
+                "access_road": items[best][1].get("highway"), "access_road_dist": round(bd, 1)}
 
     def relative_overgrowth(self, cands):
         """Yard vegetation compared with buildings within 300 m (robust z-score)."""
