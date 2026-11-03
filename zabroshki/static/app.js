@@ -12,7 +12,7 @@ const COLORS = { red: '#e5383b', yellow: '#f4c430', green: '#2dc653' };
 const S = {
   map: null, base: 'sat', layers: {}, areaLayer: null, drawer: null,
   runId: null, cands: [], markers: null, markerById: new Map(), selected: null,
-  filters: { guard: { red: true, yellow: true, green: true }, minScore: 0.25, types: {}, onlyUnlabeled: false },
+  filters: { guard: { red: true, yellow: true, green: true }, minScore: 0.25, types: {}, onlyUnlabeled: false, onlyConfirmed: false },
   polling: null, lastJobState: 'idle', settings: null,
 };
 
@@ -236,7 +236,7 @@ async function selectRun(id, fit) {
 async function loadCandidates() {
   if (!S.runId) return;
   const data = await api(`/api/runs/${S.runId}/candidates`);
-  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7] }));
+  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7], conf: a[8] || 0 }));
   buildTypeChecks();
   renderCandidates();
 }
@@ -259,6 +259,7 @@ function passes(c) {
   if (c.score < f.minScore) return false;
   if (f.types[c.type] === false) return false;
   if (f.onlyUnlabeled && c.label != null) return false;
+  if (f.onlyConfirmed && c.conf < 2) return false;
   return true;
 }
 
@@ -275,8 +276,8 @@ function renderCandidates() {
   shown.sort((a, b) => a.score - b.score); // draw best on top
   for (const c of shown) {
     const m = L.circleMarker([c.lat, c.lon], {
-      radius: 4 + 7 * c.score, color: c.label === 1 ? '#000' : (c.label === 0 ? '#7a7a7a' : '#fff'),
-      weight: c.label != null ? 3 : 1.5, fillColor: COLORS[c.guard] || COLORS.yellow, fillOpacity: 0.9,
+      radius: 4 + 7 * c.score, color: c.label === 1 ? '#000' : (c.label === 0 ? '#7a7a7a' : (c.conf >= 2 ? '#00e5ff' : '#fff')),
+      weight: c.label != null || c.conf >= 2 ? 3 : 1.5, fillColor: COLORS[c.guard] || COLORS.yellow, fillOpacity: 0.9,
     });
     m.bindTooltip(`${(c.score * 100).toFixed(0)} · ${esc(TYPE_NAMES[c.type] || c.type)}<br>${esc(c.title || '')}`, { direction: 'top' });
     m.on('click', () => selectCandidate(c.id));
@@ -289,7 +290,7 @@ function renderCandidates() {
   $('#list').innerHTML = list.map((c) => `
     <div class="item ${S.selected === c.id ? 'sel' : ''}" data-id="${c.id}">
       <span class="dot ${c.guard}"></span>
-      <span class="sc">${(c.score * 100).toFixed(0)}</span>
+      <span class="sc">${(c.score * 100).toFixed(0)}${c.conf >= 2 ? '<span class="conf" title="подтверждено ' + c.conf + ' источниками">✔' + c.conf + '</span>' : ''}</span>
       <span class="tt">${esc(TYPE_NAMES[c.type] || c.type)} · <span class="muted">${esc(c.title || '')}</span>
         ${c.label === 1 ? '<span class="lb">✔ заброшка</span>' : c.label === 0 ? '<span class="lb">✘ не заброшка</span>' : ''}</span>
     </div>`).join('') + (shown.length > 400 ? `<div class="muted" style="padding:6px">… и ещё ${shown.length - 400} (уточните фильтры)</div>` : '');
@@ -342,6 +343,8 @@ function renderDetail(d) {
       <button class="no ${d.label === 0 ? 'on' : ''}" id="lblNo">Не заброшка</button>
     </div>
     <div class="muted small" id="lblHint">${S.labelsSinceTrain ? `Новых отметок: ${S.labelsSinceTrain}. Чтобы учесть их в ранжировании — вкладка «Модель» → «Дообучить и пересчитать».` : 'Отметки сохраняются и используются для дообучения.'}</div>
+    <h4>Подтверждение: ${d.confirm_n >= 2 ? '✔ ' + d.confirm_n + ' независимых источника' : d.confirm_n === 1 ? 'один источник — нужна проверка' : 'не подтверждено'}</h4>
+    <ul class="reasons">${(d.confirm || []).map((t) => `<li><span class="w pos">✔</span><span>${esc(t)}</span></li>`).join('')}${(d.contra || []).map((t) => `<li><span class="w neg">✘</span><span>${esc(t)}</span></li>`).join('')}</ul>
     <h4>Почему такой балл</h4>
     <ul class="reasons">${reasonRows(d.reasons)}</ul>
     ${(d.reasons || []).some((r) => / \*$/.test(r.text)) ? '<div class="muted small">* вклад уменьшен: похожие признаки (несколько нейросетей, «много зелени») не суммируются полностью</div>' : ''}
@@ -467,7 +470,7 @@ async function saveOpts() {
 async function doExport(fmt) {
   if (!S.runId) return alert('Нет результатов для экспорта.');
   const filters = { guard: Object.keys(S.filters.guard).filter((g) => S.filters.guard[g]), min_score: S.filters.minScore,
-    types: Object.keys(S.filters.types).filter((t) => S.filters.types[t]), only_unlabeled: S.filters.onlyUnlabeled };
+    types: Object.keys(S.filters.types).filter((t) => S.filters.types[t]), only_unlabeled: S.filters.onlyUnlabeled, only_confirmed: S.filters.onlyConfirmed };
   try {
     const r = await api('/api/export', { method: 'POST', body: { run_id: S.runId, format: fmt, filters } });
     $('#exportMsg').innerHTML = `Сохранено: <code>${esc(r.path)}</code> · <a href="/api/export/download?name=${encodeURIComponent(r.name)}" download>скачать</a> · <a href="#" id="openFolder">открыть папку</a>`;
@@ -502,6 +505,7 @@ function wire() {
   $$('#colorChips input').forEach((i) => i.addEventListener('change', () => { S.filters.guard[i.dataset.guard] = i.checked; renderCandidates(); }));
   $('#scoreSlider').addEventListener('input', (e) => { S.filters.minScore = +e.target.value; $('#scoreVal').textContent = (+e.target.value).toFixed(2); renderCandidates(); });
   $('#onlyUnlabeled').onchange = (e) => { S.filters.onlyUnlabeled = e.target.checked; renderCandidates(); };
+  $('#onlyConfirmed').onchange = (e) => { S.filters.onlyConfirmed = e.target.checked; renderCandidates(); };
   $$('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $$('.export button').forEach((b) => b.addEventListener('click', () => doExport(b.dataset.fmt)));
   $('#btnRetrain').onclick = async () => {

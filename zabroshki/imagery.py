@@ -231,6 +231,10 @@ class Scanner:
         for i, c in enumerate(allc + new):
             if c["kind"] in ("deadend", "clearing"):
                 continue
+            # only used outside settlements and dense dacha clusters (see scoring.road_overgrown)
+            from .scoring import dense_cluster
+            if c["f"].get("in_settlement") or dense_cluster(c["f"]):
+                continue
             if i % 200 == 0:
                 job.checkpoint()
                 job.progress(i, len(allc) + len(new), "Подъездные дороги на снимке")

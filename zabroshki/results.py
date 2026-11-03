@@ -33,14 +33,15 @@ def find_label(grid, lat, lon, radius_m=15.0):
 def compact_candidates(run_id: int, min_score: float = 0.0):
     keep = max(min_score, settings().get("min_score_keep", 0.03))
     rows = db.app_con().execute(
-        "SELECT id, lat, lon, score, guard, kind, title FROM candidates WHERE run_id=? AND score>=? ORDER BY score DESC",
+        "SELECT id, lat, lon, score, guard, kind, title, json_extract(features, '$.confirm_n') AS cn "
+        "FROM candidates WHERE run_id=? AND score>=? ORDER BY score DESC",
         (run_id, keep)).fetchall()
     grid = label_index()
     items = []
     for r in rows:
         lb = find_label(grid, r["lat"], r["lon"]) if grid else None
         items.append([r["id"], round(r["lat"], 6), round(r["lon"], 6), round(r["score"], 4), r["guard"], r["kind"],
-                      r["title"] or "", lb["label"] if lb else None])
+                      r["title"] or "", lb["label"] if lb else None, r["cn"] or 0])
     return {"run_id": run_id, "items": items}
 
 
@@ -69,6 +70,7 @@ def candidate_detail(cid: int):
         "sources": srcs, "tags": db.loads(r["tags"], {}), "stage": r["stage"],
         "area_m2": f.get("area_m2"), "imagery_date": f.get("imagery_date"),
         "wayback": f.get("wb_dates") or [],
+        "confirm": f.get("confirm") or [], "contra": f.get("contra") or [], "confirm_n": f.get("confirm_n") or 0,
         "label": lb["label"] if lb else None,
         "google_maps": google_maps_url(r["lat"], r["lon"]), "osm_url": osm_url(r["lat"], r["lon"]),
         "features": {k: v for k, v in f.items() if not isinstance(v, (dict, list)) or k in ("gates", "landuse")},

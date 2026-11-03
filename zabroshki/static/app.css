@@ -119,3 +119,6 @@ h4 { margin: 10px 0 2px; }
   #typeChecks { grid-template-columns: 1fr; }
   .years { grid-template-columns: repeat(3, 1fr); }
 }
+
+.conf { color: #00e5ff; font-size: 10px; margin-left: 3px; font-weight: 700; }
+.item { grid-template-columns: 14px 58px 1fr; }

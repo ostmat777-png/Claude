@@ -27,6 +27,7 @@ def _rows(run_id, filters):
     types = set(filters.get("types") or [])
     min_score = float(filters.get("min_score") or 0)
     only_unl = bool(filters.get("only_unlabeled"))
+    only_conf = bool(filters.get("only_confirmed"))
     grid = label_index()
     out = []
     for r in rows:
@@ -36,6 +37,8 @@ def _rows(run_id, filters):
             continue
         lb = find_label(grid, r["lat"], r["lon"]) if grid else None
         if only_unl and lb is not None:
+            continue
+        if only_conf and (db.loads(r["features"], {}).get("confirm_n") or 0) < 2:
             continue
         out.append((r, lb["label"] if lb else None))
     return out
@@ -68,6 +71,7 @@ def export_run(run_id: int, fmt: str, filters: dict) -> Path:
                               "title": r["title"], "sources": db.loads(r["sources"], []),
                               "reasons": db.loads(r["reasons"], []), "guard_reasons": db.loads(r["guard_reasons"], []),
                               "tags": db.loads(r["tags"], {}), "label": lb,
+                              "confirmed_by": db.loads(r["features"], {}).get("confirm") or [],
                               "google_maps": google_maps_url(r["lat"], r["lon"]),
                               "footprint": db.loads(r["footprint"]),
                           }})
@@ -76,11 +80,13 @@ def export_run(run_id: int, fmt: str, filters: dict) -> Path:
     elif fmt == "csv":
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             w = csv.writer(fh, delimiter=";")
-            w.writerow(["id", "lat", "lon", "score", "guard", "type", "title", "sources", "reasons", "guard_reasons",
-                        "label", "google_maps"])
+            w.writerow(["id", "lat", "lon", "score", "guard", "type", "title", "confirmed_by", "sources", "reasons",
+                        "guard_reasons", "label", "google_maps"])
             for r, lb in rows:
                 w.writerow([r["id"], f"{r['lat']:.6f}", f"{r['lon']:.6f}", f"{r['score']:.3f}", GUARD_RU.get(r["guard"]),
-                            TYPE_RU.get(r["kind"], r["kind"]), r["title"], ", ".join(db.loads(r["sources"], [])),
+                            TYPE_RU.get(r["kind"], r["kind"]), r["title"],
+                            "; ".join(db.loads(r["features"], {}).get("confirm") or []),
+                            ", ".join(db.loads(r["sources"], [])),
                             _reasons_text(r, 10), _guard_text(r, 6), "" if lb is None else lb,
                             google_maps_url(r["lat"], r["lon"])])
     else:

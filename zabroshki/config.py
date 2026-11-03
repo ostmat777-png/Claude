@@ -54,7 +54,7 @@ DEFAULTS: dict = {
     "stage_b_min_score": 0.08,
     "wayback_top_k": 400,     # candidates that get the year-by-year comparison
     "wayback_max_minutes": 40,  # time budget of the Wayback stage (skipped/cut if the server is slow)
-    "vlm_top_k": 60,
+    "vlm_top_k": 150,
     "min_score_keep": 0.05,   # recall first: almost everything is kept
     "merge_radius_m": 18,
     # --- models -------------------------------------------------------------
@@ -62,6 +62,7 @@ DEFAULTS: dict = {
     "dino_model": "facebook/dinov2-small",
     "dino_input": "auto",      # auto -> 448 on GPU, 224 on CPU
     "siglip_model": "google/siglip-base-patch16-224",
+    "tta": "auto",             # average 4 rotations in the precise check (auto = on GPU)
     "ollama_url": "http://127.0.0.1:11434",
     "ollama_model": "qwen2.5vl:7b",
     # --- training -----------------------------------------------------------

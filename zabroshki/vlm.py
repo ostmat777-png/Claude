@@ -76,7 +76,10 @@ def run(job, cands, opts, force=False):
     k = int(opts.get("vlm_top_k", 60))
     z = int(opts.get("crop_zoom", 18))
     provider = opts.get("imagery_provider", "esri")
-    sel = sorted([c for c in cands if c["kind"] not in ("deadend",)], key=lambda c: -c["score"])[:k]
+    # the VLM is an independent second opinion: spend it first on strong candidates that are NOT yet confirmed
+    pool = [c for c in cands if c["kind"] not in ("deadend",) and c["score"] >= 0.2]
+    pool.sort(key=lambda c: ((c["f"].get("confirm_n") or 0) >= 2, -c["score"]))
+    sel = pool[:k]
     job.info(f"VLM {model}: проверка {len(sel)} лучших кандидатов")
     for i, c in enumerate(sel):
         job.checkpoint()

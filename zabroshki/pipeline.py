@@ -198,6 +198,10 @@ def run_search(job, run_id: int):
                 _index(merged, start=max(c.get("idx", 0) for c in cands) + 1 if cands else 0)
                 cands = merged
             _rescore(cands, weights)
+            n_abs = C.absorb_satellites(cands, lp)
+            if n_abs:
+                _rescore(cands, weights)
+                job.info(f"Объединено точек-дублей с соседними зданиями: {n_abs} — точная проверка пойдёт по разным объектам")
             stats.update(scan.stats)
             save_candidates(run_id, cands, stats=stats)
 
@@ -249,9 +253,10 @@ def run_search(job, run_id: int):
         stats["red"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "red")
         stats["green"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "green")
         stats["yellow"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "yellow")
+        stats["confirmed"] = sum(1 for c in cands if c["score"] >= keep and (c["f"].get("confirm_n") or 0) >= 2)
         save_candidates(run_id, cands, status="done", stats=stats)
         job.info(f"Итого кандидатов: {stats['above_keep']} (красных {stats['red']}, жёлтых {stats['yellow']}, "
-                 f"зелёных {stats['green']})")
+                 f"зелёных {stats['green']}); подтверждено ≥2 источниками: {stats['confirmed']}")
         return stats
     except Exception as e:
         from .jobs import Cancelled

@@ -176,6 +176,23 @@ def run(job, cands, opts, scan):
     for c in sel:
         by_tile.setdefault(lonlat_to_tile(c["lon"], c["lat"], z), []).append(c)
     import time as _time
+    # fetch the list of distinct versions for all tiles in parallel (network-bound, polite rate limit applies)
+    from concurrent.futures import ThreadPoolExecutor
+    pre_fail = [0]
+
+    def _pre(t):
+        if pre_fail[0] >= 5:
+            return
+        try:
+            distinct_versions(z, t[0], t[1])
+        except Exception:
+            pre_fail[0] += 1
+    job.progress(0, len(sel), "Wayback: список дат снимков…")
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(_pre, list(by_tile)))
+    if pre_fail[0] >= 5:
+        job.info("Wayback: сервер не отвечает — этап пропущен, поиск продолжается")
+        return
     done = 0
     n_changed = 0
     fails = 0

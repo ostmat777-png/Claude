@@ -367,8 +367,74 @@ def guard_status(c) -> tuple[str, list]:
     return "yellow", R
 
 
+def confirmation(c) -> tuple[int, list, list]:
+    """Independent evidence families that agree that the object is abandoned (and those that contradict).
+    'Confirmed' = at least two independent families agree, nothing contradicts, AND the building itself is
+    visible/known (canopy alone fools every image model in the same way, so it cannot confirm anything)."""
+    f, t = c["f"], c["tags"]
+    pos, neg = [], []
+    lc = osm.lifecycle_strength(t)[0]
+    b = f.get("bprob")
+    osm_building = "OSM" in c["sources"] and (t.get("building") or lc > 0)
+    visible = b is not None and b >= 0.5
+    present = bool(osm_building or visible)
+    if lc >= 2.2:
+        pos.append("OSM: объект отмечен как заброшенный/руины")
+    pa, pb = f.get("pA") if f.get("pA_trained") else None, f.get("pB") if f.get("pB_trained") else None
+    neigh = f.get("pA_neigh")
+    # All image-based models look at the same picture and fail the same way -> ONE evidence family "снимок".
+    vis = []
+    if present and pa is not None and pb is not None and pa >= 0.7 and pb >= 0.7 \
+            and (neigh is None or pa - neigh >= 0.15):
+        vis.append(f"обе нейросети уверены (z17 {pa:.2f}, z18 {pb:.2f}) и объект выделяется среди соседей")
+    if c.get("footprint") is not None and (f.get("tree_on") or 0) >= 0.5 and b is not None and b >= 0.3:
+        vis.append("крыша видна, но заросла деревьями/кустами")
+    if present and (f.get("zs_abandoned") or 0) >= 0.6:
+        vis.append("SigLIP видит руины/заброшенность")
+    if f.get("image_detected") and (b or 0) >= 0.9 and (f.get("zs_nobuilding") or 1) < 0.4 \
+            and not f.get("in_settlement"):
+        vis.append("постройка уверенно видна на снимке вне карт")
+    if vis:
+        pos.append("Снимок: " + ", ".join(vis))
+    hist = []
+    if (f.get("wb_bprob_drop") or 0) >= 0.3 and (f.get("wb_bprob_old") or 0) >= 0.6:
+        hist.append("крыша была и исчезла/разрушилась")
+    if (f.get("wb_veg_delta") or 0) >= 0.08 and not f.get("wb_season_mismatch") and c.get("footprint") is not None:
+        hist.append("участок зарос")
+    if hist:
+        pos.append(f"История снимков {f.get('wb_from', '')}→{f.get('wb_to', '')}: " + ", ".join(hist))
+    vlm = f.get("vlm") if isinstance(f.get("vlm"), dict) else {}
+    if vlm.get("abandoned_probability") is not None:
+        if vlm["abandoned_probability"] >= 0.6:
+            pos.append(f"VLM: заброшено ({vlm['abandoned_probability']:.2f})")
+        elif vlm["abandoned_probability"] <= 0.3:
+            neg.append(f"VLM: похоже, используется ({vlm['abandoned_probability']:.2f})")
+        if vlm.get("signs_of_use") is True:
+            neg.append("VLM: свежие следы использования")
+    if (f.get("zs_cars") or 0) >= 0.5:
+        neg.append("на снимке машины/техника")
+    if f.get("wb_veg_delta") is not None and f["wb_veg_delta"] <= -0.12 and (f.get("wb_bprob_drop") or 0) < 0.15:
+        neg.append("участок расчищен на последних снимках")
+    if f.get("image_detected") and (f.get("zs_nobuilding") or 0) >= 0.6:
+        neg.append("на снимке z18 постройки, скорее, нет")
+    if "OSM" not in c["sources"] and "MS Footprints" in c["sources"] and (b if b is not None else 1) < 0.3 and lc == 0:
+        neg.append("контур Microsoft не подтверждён детектором")
+    if pa is not None and neigh is not None and pa - neigh < 0 and lc == 0:
+        neg.append("не выделяется среди соседних построек")
+    if not present and lc == 0 and c["kind"] not in ("deadend", "clearing"):
+        neg.append("саму постройку на снимке не видно (под деревьями?) — подтвердить по снимку нельзя")
+    return len(pos), pos, neg
+
+
 def apply(cands, weights=None):
     neighbour_context(cands)
     for c in cands:
         c["score"], c["reasons"] = score(c, weights)
+        n, pos, neg = confirmation(c)
+        c["f"]["confirm_n"] = n if not neg else max(0, n - len(neg))
+        c["f"]["confirm"] = pos
+        c["f"]["contra"] = neg
+        if n >= 2 and not neg:
+            # independent agreement is stronger than the (capped) sum suggests
+            c["score"] = max(c["score"], min(0.97, c["score"] + 0.1 * (n - 1)))
         c["guard"], c["guard_reasons"] = guard_status(c)

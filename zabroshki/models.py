@@ -166,7 +166,13 @@ class Siglip:
         t = t / t.norm(dim=-1, keepdim=True)
         return t.cpu().numpy()
 
-    def image_embeddings(self, imgs: np.ndarray, batch=None) -> np.ndarray:
+    def image_embeddings(self, imgs: np.ndarray, batch=None, tta: bool = False) -> np.ndarray:
+        """L2-normalised embeddings. tta=True averages the 4 rotations (top-down imagery has no 'up'),
+        which makes the scores of single crops much less noisy."""
+        if tta:
+            embs = [self.image_embeddings(np.ascontiguousarray(np.rot90(imgs, k, axes=(1, 2))), batch) for k in range(4)]
+            e = np.mean(embs, axis=0)
+            return e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-8)
         torch = self.torch
         batch = batch or (32 if self.dev.type == "cuda" else 8)
         outs = []
@@ -197,6 +203,16 @@ class Siglip:
         p_ab = ea / (ea + em + en)
         p_cars = 1 / (1 + np.exp(-(c - nc)))
         return {"abandoned": p_ab, "cars": p_cars, "nobuilding": en / (ea + em + en)}
+
+
+def use_tta() -> bool:
+    v = settings().get("tta", "auto")
+    if v == "auto":
+        try:
+            return device().type == "cuda"
+        except Exception:
+            return False
+    return bool(v)
 
 
 def dino_input_size() -> int:

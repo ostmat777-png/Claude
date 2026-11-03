@@ -13,7 +13,8 @@ CROP = 384  # px at crop zoom (~110 m at z18, 60°N)
 
 
 def emb_key(name, provider, z, lat, lon):
-    return f"B|{name}|{provider}|{z}|{lat:.6f},{lon:.6f}"
+    from .models import use_tta
+    return f"B|{name}|{provider}|{z}|{'tta|' if use_tta() else ''}{lat:.6f},{lon:.6f}"
 
 
 def embed_points_B(points, provider=None, z=None, job=None):
@@ -47,7 +48,8 @@ def embed_points_B(points, provider=None, z=None, job=None):
             ok.append(i)
         if not imgs:
             continue
-        e = sg.image_embeddings(np.stack(imgs))
+        from .models import use_tta
+        e = sg.image_embeddings(np.stack(imgs), tta=use_tta())
         for i, v in zip(ok, e):
             out[i] = v
             new[keys[i]] = v
