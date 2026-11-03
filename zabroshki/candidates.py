@@ -290,7 +290,21 @@ def assemble(d: osm.OsmData, footprints_ll, lp: LocalProj, area_poly_ll, job=Non
     return out, ctx
 
 
-def compute_context(cands, ctx: Context, job=None):
+def neutralize_missing(f: dict, failed) -> None:
+    """If parts of OSM could not be downloaded, do not pretend we know the context."""
+    failed = set(failed or [])
+    if "all" in failed or "context" in failed:
+        for k in ("outside_settlement", "in_settlement", "in_dacha", "in_military", "in_industrial"):
+            f[k] = False
+        f["osm_context_missing"] = True
+    if "all" in failed or "highways" in failed:
+        f["road_dist"] = None
+        f["only_minor_roads_100m"] = False
+        f["dead_end_near"] = False
+        f["osm_roads_missing"] = True
+
+
+def compute_context(cands, ctx: Context, job=None, failed=None):
     lp = ctx.lp
     drop = []
     for i, c in enumerate(cands):
@@ -302,6 +316,8 @@ def compute_context(cands, ctx: Context, job=None):
         f = ctx.features(pt, fp, c["tags"])
         if fp is not None:
             f["area_m2"] = round(fp.area, 1)
+        if failed:
+            neutralize_missing(f, failed)
         c["f"].update(f)
         if c["kind"] in ("building", "unmapped"):
             if c["tags"]:

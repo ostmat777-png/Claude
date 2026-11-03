@@ -177,7 +177,7 @@ def run_search(job, run_id: int):
         # 3. candidates
         stage(stage_names[2])
         cands, ctx = C.assemble(d, fps, lp, poly, job)
-        C.compute_context(cands, ctx, job)
+        C.compute_context(cands, ctx, job, failed)
         cands = C.merge_duplicates(cands, lp, opts.get("merge_radius_m", 18))
         _index(cands)
         _rescore(cands, weights)
@@ -193,7 +193,7 @@ def run_search(job, run_id: int):
             stage(stage_names[k])
             new = scan.run(cands, ctx, fps, d)
             if new:
-                C.compute_context(new, ctx, job)
+                C.compute_context(new, ctx, job, failed)
                 merged = C.merge_duplicates(cands + new, lp, opts.get("merge_radius_m", 18))
                 _index(merged, start=max(c.get("idx", 0) for c in cands) + 1 if cands else 0)
                 cands = merged
