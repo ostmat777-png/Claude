@@ -96,7 +96,9 @@
       <div id="modelInfo" class="muted">…</div>
       <div class="row">
         <button id="btnRetrain" class="primary">↻ Дообучить и пересчитать</button>
+        <button id="btnEval" title="Полнота на examples/positives.csv и слепой тест на объектах OSM">📊 Оценить качество</button>
       </div>
+      <pre id="evalBox" class="tags" style="display:none;max-height:340px"></pre>
       <h4>Параметры поиска</h4>
       <div class="form" id="optForm">
         <label><input type="checkbox" id="optImagery" checked> Сплошной скан снимков (z<span id="zScan">17</span>)</label>

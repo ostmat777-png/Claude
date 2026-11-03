@@ -171,7 +171,11 @@ function startPolling() {
     if (active && tick % 15 === 0 && j.run_id && j.run_id === S.runId) loadCandidates();
     if (!active) {
       clearInterval(S.polling); S.polling = null;
-      if (S.lastJobState !== j.state) { if (j.run_id) { await loadRuns(j.run_id); } loadModelInfo(); }
+      if (S.lastJobState !== j.state) {
+        if (j.name === 'evaluate') { showEval(S.pendingEval || S.runId); }
+        else if (j.run_id) { await loadRuns(j.run_id); }
+        loadModelInfo();
+      }
     }
     S.lastJobState = j.state;
   }, 700);
@@ -195,7 +199,7 @@ function renderJob(j) {
   $('#progressFill').style.width = pct + '%';
   let t = '';
   if (j.state === 'idle') t = 'Выделите область и нажмите «Искать»';
-  else if (j.state === 'done') t = `Готово (${j.name === 'retrain' ? 'дообучение' : 'поиск'}) · ${j.message || ''}`;
+  else if (j.state === 'done') t = `Готово (${{ retrain: 'дообучение', evaluate: 'оценка качества' }[j.name] || 'поиск'}) · ${j.message || ''}`;
   else if (j.state === 'error') t = 'Ошибка: ' + j.error;
   else if (j.state === 'cancelled') t = 'Остановлено';
   else {
@@ -389,10 +393,20 @@ function showBig(src, cap) {
   el.style.display = 'flex';
 }
 
+async function showEval(runId) {
+  try {
+    const t = await api('/api/evaluate/report?run_id=' + runId);
+    $('#evalBox').textContent = t;
+    $('#evalBox').style.display = 'block';
+    switchTab('model');
+  } catch (e) { $('#evalBox').textContent = e.message; $('#evalBox').style.display = 'block'; }
+}
+
 /* ------------------------------------------------------------------ model / settings */
 async function loadModelInfo() {
   try {
     const m = await api('/api/model');
+    S.labelsSinceTrain = m.labels_since_train;
     const lines = [
       `<b>Примеры:</b> ${m.positives_csv} из examples/positives.csv` + (m.positives_csv_path ? ` <span class="small">(${esc(m.positives_csv_path)})</span>` : ''),
       `<b>Отметки:</b> заброшка ${m.labels_pos}, не заброшка ${m.labels_neg}` + (m.labels_since_train ? ` · новых с последнего обучения: ${m.labels_since_train}` : ''),
@@ -475,6 +489,14 @@ function wire() {
     try { await api('/api/retrain', { method: 'POST', body: { run_id: S.runId } }); startPolling(); } catch (e) { alert(e.message); }
   };
   $('#btnSaveOpts').onclick = saveOpts;
+  $('#btnEval').onclick = async () => {
+    if (!S.runId) return alert('Сначала выполните поиск.');
+    try {
+      await api('/api/evaluate', { method: 'POST', body: { run_id: S.runId } });
+      S.pendingEval = S.runId;
+      startPolling();
+    } catch (e) { alert(e.message); }
+  };
 }
 
 window.addEventListener('DOMContentLoaded', async () => {

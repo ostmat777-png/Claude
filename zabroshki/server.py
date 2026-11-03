@@ -216,6 +216,24 @@ def retrain(payload: dict = Body(default={})):
     return job.status()
 
 
+@app.post("/api/evaluate")
+def evaluate_start(payload: dict = Body(default={})):
+    from . import evaluate
+    try:
+        job = manager.start(Job("evaluate", evaluate.run_job, run_id=payload.get("run_id")))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return job.status()
+
+
+@app.get("/api/evaluate/report")
+def evaluate_report(run_id: int):
+    p = DATA_DIR / f"eval_run{run_id}.md"
+    if not p.exists():
+        raise HTTPException(404, "Отчёта нет — нажмите «Оценить качество»")
+    return Response(p.read_text(encoding="utf-8"), media_type="text/plain; charset=utf-8")
+
+
 @app.get("/api/model")
 def model_info():
     from .training import model_status

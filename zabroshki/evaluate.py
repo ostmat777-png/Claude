@@ -153,7 +153,13 @@ def positives_eval(cands, run_poly):
     return res, rows
 
 
-def main(run_id=None):
+def run_job(job, run_id=None):
+    job.set_stage(1, 1, "Оценка качества")
+    main(run_id, quiet=True)
+    return {"run_id": run_id}
+
+
+def main(run_id=None, quiet=False):
     con = db.app_con()
     if run_id is None:
         r = con.execute("SELECT id FROM runs WHERE status='done' ORDER BY id DESC LIMIT 1").fetchone()
@@ -215,6 +221,7 @@ def main(run_id=None):
     if res:
         summary.append(f"слепой тест OSM: AUC {res['auc']}, медианное место {res['median_rank_percent']}% списка")
     save_eval("; ".join(summary) or "нет данных", {"positives": pres, "proxy": res, "run": run_id})
-    print(text)
-    print(f"\nОтчёт сохранён: {out}")
+    if not quiet:
+        print(text)
+        print(f"\nОтчёт сохранён: {out}")
     return 0
