@@ -20,6 +20,12 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 USER_AGENT = "Zabroshki/1.0 (desktop research tool)"
 
+
+def user_agent() -> str:
+    """Tile/Overpass servers like a way to contact heavy users; add one in settings.json ("contact")."""
+    contact = (settings().get("contact") or "").strip()
+    return f"{USER_AGENT[:-1]}; {contact})" if contact else USER_AGENT
+
 DEFAULTS: dict = {
     # --- imagery -----------------------------------------------------------
     "imagery_provider": "esri",
@@ -69,6 +75,8 @@ DEFAULTS: dict = {
     "use_osm_weak_positives": True,
     "negatives_per_positive": 6,
     "min_negatives": 80,
+    # optional contact (e-mail or URL) appended to the User-Agent for tile/Overpass server operators
+    "contact": "",
     # --- server -------------------------------------------------------------
     "port": 0,                 # 0 = pick a free port
 }

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .config import USER_AGENT, settings
+from .config import settings, user_agent
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def session() -> requests.Session:
     s = getattr(_session_local, "s", None)
     if s is None:
         s = requests.Session()
-        s.headers["User-Agent"] = USER_AGENT
+        s.headers["User-Agent"] = user_agent()
         adapter = requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16)
         s.mount("https://", adapter)
         s.mount("http://", adapter)

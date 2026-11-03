@@ -209,6 +209,7 @@ lat,lon,comment
 | `dino_model` / `dino_input` | `facebook/dinov2-small` / auto (448 на GPU) | на 16 ГБ можно `facebook/dinov2-base` |
 | `siglip_model` | `google/siglip-base-patch16-224` | |
 | `use_vlm`, `ollama_url`, `ollama_model` | auto, `http://127.0.0.1:11434`, `qwen2.5vl:7b` | |
+| `contact` | `""` | ваш e-mail/URL для заголовка User-Agent (по желанию: так операторы серверов карт смогут связаться при проблемах; по умолчанию никаких личных данных не отправляется) |
 | `min_score_keep` | 0.05 | ниже этого балла кандидаты не показываются (полнота важнее, порог низкий) |
 
 **VLM (по желанию):** установите Ollama, выполните `ollama pull qwen2.5vl:7b` и держите Ollama запущенным.
