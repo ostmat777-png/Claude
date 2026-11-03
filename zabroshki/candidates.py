@@ -349,8 +349,12 @@ def merge_duplicates(cands, lp: LocalProj, radius=18.0):
         k = c["key"].split(":")[0]
         return k
 
+    point_like = {"dead": 60.0, "clear": 35.0}
     for i, (x, y) in enumerate(xy):
         ci = cands[i]
+        fi = src_family(ci)
+        if fi in point_like:
+            continue
         gx, gy = int(x // cell), int(y // cell)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
@@ -358,17 +362,11 @@ def merge_duplicates(cands, lp: LocalProj, radius=18.0):
                     if j <= i:
                         continue
                     cj = cands[j]
-                    fi, fj = src_family(ci), src_family(cj)
-                    dist = math.hypot(xy[j][0] - x, xy[j][1] - y)
-                    if {fi, fj} & {"dead"}:
-                        if fi == fj or dist > 60:
-                            continue
-                    elif {fi, fj} & {"clear"}:
-                        if fi == fj or dist > 35:
-                            continue
-                    elif fi == fj:
+                    fj = src_family(cj)
+                    if fj in point_like or fi == fj:
                         continue
-                    elif {fi, fj} <= {"osm", "ms"}:
+                    dist = math.hypot(xy[j][0] - x, xy[j][1] - y)
+                    if {fi, fj} <= {"osm", "ms"}:
                         # two footprints: same object only if they overlap (or nearly coincide)
                         gi, gj = ci.get("footprint"), cj.get("footprint")
                         if gi is not None and gj is not None:
@@ -380,16 +378,33 @@ def merge_duplicates(cands, lp: LocalProj, radius=18.0):
                                     continue
                         elif dist > radius:
                             continue
-                    elif {fi, fj} & {"img"}:
+                    elif "img" in (fi, fj):
                         other = cj if fi == "img" else ci
+                        pt = cands[i if fi == "img" else j]
                         g = other.get("footprint")
-                        if dist > 15 and not (g is not None and dist < 40 and
-                                              g.buffer(0.00008).contains(Point(cands[i if fi == "img" else j]["lon"],
-                                                                               cands[i if fi == "img" else j]["lat"]))):
+                        inside = g is not None and dist < 40 and g.buffer(0.00008).contains(Point(pt["lon"], pt["lat"]))
+                        if dist > 15 and not inside:
                             continue
                     elif dist > radius:
                         continue
                     parent[find(j)] = find(i)
+    # dead ends / clearings: attach to the single nearest object (no chaining through them)
+    for i, (x, y) in enumerate(xy):
+        fi = src_family(cands[i])
+        if fi not in point_like:
+            continue
+        best, bd = None, point_like[fi]
+        gx, gy = int(x // cell), int(y // cell)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in grid.get((gx + dx, gy + dy), ()):
+                    if src_family(cands[j]) in point_like:
+                        continue
+                    dist = math.hypot(xy[j][0] - x, xy[j][1] - y)
+                    if dist <= bd:
+                        best, bd = j, dist
+        if best is not None:
+            parent[find(i)] = find(best)
     groups: dict = {}
     for i in range(len(cands)):
         groups.setdefault(find(i), []).append(i)

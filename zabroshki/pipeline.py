@@ -194,8 +194,6 @@ def run_search(job, run_id: int):
             new = scan.run(cands, ctx, fps, d)
             if new:
                 C.compute_context(new, ctx, job)
-                for c in new:
-                    c["f"].update(scan.candidate_features(c))
                 merged = C.merge_duplicates(cands + new, lp, opts.get("merge_radius_m", 18))
                 _index(merged, start=max(c.get("idx", 0) for c in cands) + 1 if cands else 0)
                 cands = merged

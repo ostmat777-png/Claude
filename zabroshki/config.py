@@ -12,6 +12,11 @@ DATA_DIR = Path(os.environ.get("ZABROSHKI_DATA", ROOT / "data")).resolve()
 EXAMPLES_DIR = Path(os.environ.get("ZABROSHKI_EXAMPLES", ROOT / "examples")).resolve()
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+# Neural model weights are cached inside the data folder (must be set before transformers is imported).
+os.environ.setdefault("HF_HOME", str(DATA_DIR / "models"))
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 USER_AGENT = "Zabroshki/1.0 (desktop research tool)"
 
 DEFAULTS: dict = {

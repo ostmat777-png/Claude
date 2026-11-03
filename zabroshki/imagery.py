@@ -217,12 +217,15 @@ class Scanner:
         self.stats["clearings"] = sum(1 for c in new if c["kind"] == "clearing")
         job.info(f"По снимкам: новых построек {self.stats['image_buildings']}, прогалин {self.stats['clearings']}")
 
-        # ---- per-candidate features for existing candidates
-        allc = cands
+        # ---- per-candidate features for existing candidates (tile order keeps the decoded-tile LRU warm)
+        allc = sorted(cands, key=lambda c: (int(lonlat_to_pixel(c["lon"], c["lat"], self.z)[1] // TILE),
+                                            int(lonlat_to_pixel(c["lon"], c["lat"], self.z)[0] // TILE)))
         for i, c in enumerate(allc):
             if i % 200 == 0:
                 job.checkpoint()
                 job.progress(i, len(allc), f"Признаки кандидатов по снимку: {i}/{len(allc)}")
+            c["f"].update(self.candidate_features(c))
+        for c in new:
             c["f"].update(self.candidate_features(c))
         self.relative_overgrowth(allc + new)
         if self.use_models and new:

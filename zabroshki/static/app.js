@@ -329,6 +329,7 @@ function renderDetail(d) {
       <button class="yes ${d.label === 1 ? 'on' : ''}" id="lblYes">Заброшка</button>
       <button class="no ${d.label === 0 ? 'on' : ''}" id="lblNo">Не заброшка</button>
     </div>
+    <div class="muted small" id="lblHint">${S.labelsSinceTrain ? `Новых отметок: ${S.labelsSinceTrain}. Чтобы учесть их в ранжировании — вкладка «Модель» → «Дообучить и пересчитать».` : 'Отметки сохраняются и используются для дообучения.'}</div>
     <h4>Почему такой балл</h4>
     <ul class="reasons">${reasonRows(d.reasons)}</ul>
     <h4>Статус охраны: ${GUARD_NAMES[d.guard] || d.guard}</h4>
@@ -355,7 +356,8 @@ function renderDetail(d) {
 
 async function setLabel(id, label) {
   try {
-    await api(`/api/candidates/${id}/label`, { method: 'POST', body: { label } });
+    const r = await api(`/api/candidates/${id}/label`, { method: 'POST', body: { label } });
+    S.labelsSinceTrain = r.labels_since_train;
   } catch (e) { alert('Ошибка: ' + e.message); return; }
   const c = S.cands.find((x) => x.id === id);
   if (c) c.label = label;
