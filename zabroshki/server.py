@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db, tiles
@@ -19,6 +19,41 @@ from .jobs import Job, manager
 log = logging.getLogger(__name__)
 app = FastAPI(title="Zabroshki", docs_url="/api/docs")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.state.lan_token = None
+app.state.lan_urls = []
+
+_LOCAL = ("127.0.0.1", "::1", "localhost", "testclient")
+
+
+@app.middleware("http")
+async def lan_guard(request, call_next):
+    """Requests from other devices (phone over Wi-Fi) need the secret key from the LAN link."""
+    client = request.client.host if request.client else ""
+    if client in _LOCAL:
+        return await call_next(request)
+    token = app.state.lan_token
+    key = request.query_params.get("key")
+    if not token or (key != token and request.cookies.get("zkey") != token):
+        return PlainTextResponse("Доступ закрыт. Откройте ссылку с ключом, которую показывает программа "
+                                 "(кнопка «📱» или консоль при запуске run_lan.bat).", status_code=403)
+    resp = await call_next(request)
+    if key == token:
+        resp.set_cookie("zkey", token, httponly=True, samesite="lax", max_age=30 * 86400)
+    return resp
+
+
+@app.get("/api/lan")
+def lan_info():
+    """LAN access info with a QR code (only meaningful when started with --lan)."""
+    urls = app.state.lan_urls or []
+    qr = None
+    if urls:
+        try:
+            import segno
+            qr = segno.make(urls[0], error="m").svg_inline(scale=5, dark="#000", light="#fff")
+        except Exception:
+            qr = None
+    return {"enabled": bool(app.state.lan_token), "urls": urls, "qr_svg": qr}
 
 _EMPTY_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"

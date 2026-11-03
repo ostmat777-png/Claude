@@ -36,7 +36,9 @@ select, input[type=number] { background: var(--panel2); border: 1px solid var(--
 #progressFill { height: 100%; width: 0; background: linear-gradient(90deg, #3a86c8, #59c3ff); transition: width .4s; }
 #progressText { font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; }
 
-main { position: absolute; top: 52px; bottom: 0; left: 0; right: 0; display: flex; }
+body { display: flex; flex-direction: column; }
+#topbar { flex: none; }
+main { position: relative; flex: 1; min-height: 0; display: flex; }
 #map { flex: 1; background: #0b0d10; }
 #side { width: 400px; background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); }
@@ -95,3 +97,25 @@ h4 { margin: 10px 0 2px; }
 #bigimg { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
 #bigimg img { max-width: 92vw; max-height: 92vh; border-radius: 6px; }
 #bigimg .cap { position: absolute; bottom: 20px; color: #fff; font-size: 14px; }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10000; display: flex; align-items: center; justify-content: center; }
+.modalbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; max-width: 92vw; display: flex; flex-direction: column; gap: 10px; }
+.modalbox svg { background: #fff; padding: 8px; border-radius: 6px; display: block; margin: 0 auto; }
+.modalbox code { word-break: break-all; color: var(--text); }
+
+/* ---------------- phone / narrow screens ---------------- */
+@media (max-width: 820px) {
+  body { font-size: 14px; }
+  #topbar { height: auto; flex-wrap: wrap; white-space: normal; gap: 6px 8px; padding: 6px 8px; overflow: visible; }
+  .brand { font-size: 15px; }
+  #areaInfo { display: none; }
+  #progress { min-width: 100%; order: 10; }
+  main { flex-direction: column; }
+  #map { flex: 1 1 52%; min-height: 220px; }
+  #side { width: 100%; flex: 1 1 48%; border-left: 0; border-top: 1px solid var(--line); min-height: 0; }
+  .tabs button { padding: 10px 2px; }
+  button, select { min-height: 34px; }
+  .labelbtns button { padding: 12px; }
+  #typeChecks { grid-template-columns: 1fr; }
+  .years { grid-template-columns: repeat(3, 1fr); }
+}

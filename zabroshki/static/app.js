@@ -393,6 +393,25 @@ function showBig(src, cap) {
   el.style.display = 'flex';
 }
 
+async function showPhone() {
+  let info = { enabled: false, urls: [] };
+  try { info = await api('/api/lan'); } catch (e) { /* ignore */ }
+  const body = $('#phoneBody');
+  if (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost') {
+    body.innerHTML = 'Вы уже открыли программу с другого устройства 👍';
+  } else if (!info.enabled || !info.urls.length) {
+    body.innerHTML = 'Сейчас доступ с телефона выключен. Закройте программу и запустите <b>run_lan.bat</b> ' +
+      '(или <code>run.bat --lan</code>), затем снова нажмите «📱».<br><br>Телефон должен быть в той же Wi-Fi сети, что и компьютер. ' +
+      'Вся работа (скан, нейросети) идёт на компьютере, телефон только показывает карту и отметки.';
+  } else {
+    body.innerHTML = (info.qr_svg || '') +
+      '<div>Отсканируйте QR-код камерой телефона или откройте ссылку:</div>' +
+      info.urls.map((u) => `<div><code>${esc(u)}</code></div>`).join('') +
+      '<div class="small">Телефон должен быть в той же Wi-Fi сети. Ссылка содержит ключ доступа — не публикуйте её.</div>';
+  }
+  $('#phoneModal').style.display = 'flex';
+}
+
 async function showEval(runId) {
   try {
     const t = await api('/api/evaluate/report?run_id=' + runId);
@@ -489,6 +508,8 @@ function wire() {
     try { await api('/api/retrain', { method: 'POST', body: { run_id: S.runId } }); startPolling(); } catch (e) { alert(e.message); }
   };
   $('#btnSaveOpts').onclick = saveOpts;
+  $('#btnPhone').onclick = showPhone;
+  $('#phoneClose').onclick = () => { $('#phoneModal').style.display = 'none'; };
   $('#btnEval').onclick = async () => {
     if (!S.runId) return alert('Сначала выполните поиск.');
     try {

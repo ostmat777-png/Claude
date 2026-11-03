@@ -12,3 +12,4 @@ pywebview>=5.0
 transformers>=4.45
 sentencepiece>=0.2
 protobuf>=4.25
+segno>=1.5

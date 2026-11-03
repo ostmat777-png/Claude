@@ -37,6 +37,8 @@
     <button id="btnCancel" disabled title="Остановить">■</button>
   </div>
 
+  <button id="btnPhone" title="Открыть на телефоне (та же Wi-Fi сеть)">📱</button>
+
   <div id="progress">
     <div id="progressBar"><div id="progressFill"></div></div>
     <div id="progressText" class="muted">Выделите область и нажмите «Искать»</div>
@@ -120,6 +122,14 @@
     </section>
   </aside>
 </main>
+
+<div id="phoneModal" class="modal" style="display:none">
+  <div class="modalbox">
+    <h3>Открыть на телефоне</h3>
+    <div id="phoneBody" class="muted">…</div>
+    <button id="phoneClose">Закрыть</button>
+  </div>
+</div>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
 <script src="/static/vendor/leaflet-draw/leaflet.draw.js"></script>

@@ -37,10 +37,42 @@ def _setup_logging(verbose=False):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _serve(port: int):
+def _port_free(port: int, host="0.0.0.0") -> bool:
+    s = socket.socket()
+    try:
+        s.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def lan_ips() -> list[str]:
+    """IPv4 addresses of this computer in the local network (Wi-Fi/Ethernet)."""
+    ips = []
+    try:  # the address used for outgoing traffic is the most likely Wi-Fi/LAN one
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if ip not in ips:
+                ips.append(ip)
+    except OSError:
+        pass
+    private = [ip for ip in ips if ip.startswith(("192.168.", "10.")) or
+               (ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31)]
+    return private or [ip for ip in ips if not ip.startswith("127.")]
+
+
+def _serve(port: int, host: str = "127.0.0.1"):
     import uvicorn
     from .server import app
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", access_log=False)
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True, name="uvicorn")
     t.start()
@@ -56,6 +88,8 @@ def main(argv=None):
     ap.add_argument("command", nargs="?", default="gui", choices=["gui", "scan", "evaluate", "prefetch-models"])
     ap.add_argument("--browser", action="store_true")
     ap.add_argument("--server-only", action="store_true")
+    ap.add_argument("--lan", action="store_true",
+                    help="открыть интерфейс с телефона/планшета в той же Wi-Fi сети (по ссылке с ключом)")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--bbox", help="S,W,N,E for headless scan")
     ap.add_argument("--name", default=None)
@@ -75,10 +109,26 @@ def main(argv=None):
         from .models import prefetch_models
         return prefetch_models()
 
-    port = args.port or settings().get("port") or _free_port()
-    server, thread = _serve(port)
+    if args.lan:
+        import secrets
+        from .server import app
+        port = args.port or settings().get("port") or (8765 if _port_free(8765) else _free_port())
+        token = secrets.token_urlsafe(9)
+        app.state.lan_token = token
+        app.state.lan_urls = [f"http://{ip}:{port}/?key={token}" for ip in lan_ips()]
+        server, thread = _serve(port, host="0.0.0.0")
+    else:
+        port = args.port or settings().get("port") or _free_port()
+        server, thread = _serve(port)
     url = f"http://127.0.0.1:{port}/"
     logging.info("UI at %s  (data: %s)", url, DATA_DIR)
+    if args.lan:
+        from .server import app
+        print("\n=== Доступ с телефона (тот же Wi-Fi) ===")
+        for u in app.state.lan_urls:
+            print("  " + u)
+        print("Ссылку и QR-код также показывает кнопка «📱» в окне программы.")
+        print("Если Windows спросит про брандмауэр — разрешите доступ для частных сетей.\n")
 
     if args.server_only:
         try:
