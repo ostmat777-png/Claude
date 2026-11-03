@@ -135,3 +135,30 @@ def test_placeholder_detection():
     b = io.BytesIO()
     im.save(b, format="JPEG")
     assert is_placeholder(b.getvalue())
+
+
+def test_absorb_satellites_and_annexes():
+    lp = LocalProj(60.7, 28.7)
+    big = C.new_candidate("osm:way/1", 60.70005, 28.7001, "house",
+                          footprint=box(28.70000, 60.70000, 28.70040, 60.70020), sources=["OSM"])
+    big["f"].update({"area_m2": 500.0})
+    shed = C.new_candidate("osm:way/2", 60.70024, 28.70010, "house",
+                           footprint=box(28.70008, 60.70022, 28.70012, 60.70026), sources=["OSM"])
+    shed["f"].update({"area_m2": 20.0})
+    clear = C.new_candidate("clear:1", 60.70010, 28.70060, "clearing", sources=["снимок"])
+    far = C.new_candidate("osm:way/3", 60.7100, 28.7100, "house",
+                          footprint=box(28.70995, 60.70995, 28.71005, 60.71005), sources=["OSM"])
+    far["f"].update({"area_m2": 30.0})
+    cands = [big, shed, clear, far]
+    for c in cands:
+        c["score"] = 0.6
+    C.absorb_satellites(cands, lp)
+    keys = {c["key"] for c in cands}
+    assert keys == {"osm:way/1", "osm:way/3"}
+    assert big["f"].get("annexes") == 1 and big["f"].get("satellites") == 1
+
+
+def test_dense_cluster_dacha_not_outside():
+    c = _cand(outside_settlement=True, footprints_100m=30, tree_ring=0.8)
+    xv = scoring.feature_vector(c)
+    assert "outside" not in xv and "dense" in xv

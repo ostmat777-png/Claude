@@ -57,6 +57,9 @@ def candidate_detail(cid: int):
         srcs = srcs + ["снимок z%d (SigLIP)" % settings()["crop_zoom"]]
     if f.get("wb_dates"):
         srcs = srcs + ["сравнение по годам: " + ", ".join(d["date"] for d in f["wb_dates"])]
+    if f.get("annexes") or f.get("satellites"):
+        srcs = srcs + [f"объединено в одну метку: {f.get('annexes', 0)} мелких построек рядом, "
+                       f"{f.get('satellites', 0)} точек (тупики/прогалины/неподтверждённые контуры)"]
     if isinstance(f.get("vlm"), dict):
         srcs = srcs + ["VLM " + str(f["vlm"].get("model", ""))]
     return {

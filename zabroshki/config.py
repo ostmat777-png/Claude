@@ -53,6 +53,7 @@ DEFAULTS: dict = {
     "stage_b_top_k": 1500,    # candidates that get a z18 crop + SigLIP
     "stage_b_min_score": 0.08,
     "wayback_top_k": 400,     # candidates that get the year-by-year comparison
+    "wayback_max_minutes": 40,  # time budget of the Wayback stage (skipped/cut if the server is slow)
     "vlm_top_k": 60,
     "min_score_keep": 0.05,   # recall first: almost everything is kept
     "merge_radius_m": 18,

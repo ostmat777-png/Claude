@@ -34,7 +34,7 @@ def tilemap(release: int, z: int, x: int, y: int):
     key = f"wbtm:{release}:{z}:{x}:{y}"
     raw = db.http_cache_get(key)
     if raw is None:
-        r = net.get(TILEMAP_URL.format(r=release, z=z, x=x, y=y), timeout=30, ok_statuses=(200, 404))
+        r = net.get(TILEMAP_URL.format(r=release, z=z, x=x, y=y), timeout=15, retries=1, ok_statuses=(200, 404))
         raw = r.content if r.status_code == 200 else b"{}"
         db.http_cache_put(key, raw)
     try:
@@ -90,7 +90,7 @@ def capture_date(release: int, lat: float, lon: float, z: int) -> dict:
                  "&spatialRel=esriSpatialRelIntersects&outFields=SRC_DATE,SRC_DATE2,SRC_DESC,SRC_RES"
                  "&returnGeometry=false&f=json")
             try:
-                d = net.get(q, timeout=30).json()
+                d = net.get(q, timeout=15, retries=1).json()
                 feats = d.get("features") or []
                 if feats:
                     a = feats[0]["attributes"]
@@ -175,15 +175,27 @@ def run(job, cands, opts, scan):
     by_tile: dict = {}
     for c in sel:
         by_tile.setdefault(lonlat_to_tile(c["lon"], c["lat"], z), []).append(c)
+    import time as _time
     done = 0
     n_changed = 0
+    fails = 0
+    t_end = _time.time() + 60 * float(opts.get("wayback_max_minutes", 40))
     for (tx, ty), group in by_tile.items():
         job.checkpoint()
+        if _time.time() > t_end:
+            job.info(f"Wayback: превышен лимит времени этапа ({opts.get('wayback_max_minutes', 40)} мин) — "
+                     f"сравнено {n_changed}, остальные без сравнения по годам")
+            break
         try:
             vers_ids = distinct_versions(z, tx, ty)
+            fails = 0
         except Exception as e:
             log.info("wayback versions failed: %s", e)
             vers_ids = []
+            fails += 1
+            if fails >= 5:
+                job.info("Wayback: сервер не отвечает (5 ошибок подряд) — этап пропущен, поиск продолжается")
+                break
         for c in group:
             done += 1
             job.progress(done, len(sel), f"Wayback: {done}/{len(sel)}")

@@ -84,7 +84,9 @@ def fetch_tile(provider: str, z: int, x: int, y: int, interactive=False) -> tupl
         return row[0], row[1]
     url = provider_url(provider, z, x, y)
     try:
-        r = net.get(url, interactive=interactive, ok_statuses=(200, 404), timeout=30, allow_redirects=True)
+        quick = provider.startswith("wayback:")  # history is optional: do not wait long for it
+        r = net.get(url, interactive=interactive, ok_statuses=(200, 404), timeout=15 if quick else 30,
+                    retries=1 if quick else 4, allow_redirects=True)
     except net.HttpError as e:
         log.warning("tile failed %s: %s", url, e)
         return 0, None  # do not cache transient errors

@@ -43,7 +43,16 @@ DEFAULT_WEIGHTS = {
     "zs_nobuilding": -1.5,
     "ms_unconfirmed": -1.0,
     "tiny": -0.5,
+    "garages": -1.2,
+    "dense": -0.4,
 }
+
+DENSE_N = 12  # buildings within ~100 m: a dacha cooperative / village even if OSM does not map it as one
+
+
+def dense_cluster(f) -> bool:
+    n = max(f.get("footprints_100m") or 0, int(1.5 * (f.get("osm_buildings_80m") or 0)))
+    return n >= DENSE_N
 
 # Evidence that is meaningless (tautological or out-of-distribution) for candidates that are not a known building:
 # a forest clearing is surrounded by forest by definition; image-only detections are only searched under tree cover;
@@ -60,6 +69,41 @@ def _clip(x, lo, hi):
     return max(lo, min(hi, x))
 
 
+def _relative(p, neigh):
+    """A building is suspicious if it looks more abandoned than the buildings around it.
+    When the whole neighbourhood scores high (a dacha area under trees), the classifier reacts to the
+    surroundings, not to the house: subtract most of the neighbours' typical level."""
+    v = _logit(p)
+    if neigh is None:
+        return v, ""
+    base = _logit(neigh)
+    if base <= 0:
+        return v, ""
+    return v - 0.8 * base, f" (у соседей {neigh:.2f} — сравнение с окружением)"
+
+
+def neighbour_context(cands, radius_m=250.0, min_n=6):
+    """Median classifier-A probability of nearby mapped buildings -> f['pA_neigh']."""
+    import numpy as np
+    pts = [c for c in cands if c["f"].get("pA") is not None and c.get("footprint") is not None]
+    if len(pts) < min_n:
+        return
+    k = 111320.0 * math.cos(math.radians(pts[0]["lat"]))
+    cell = radius_m
+    grid: dict = {}
+    for c in pts:
+        x, y = c["lon"] * k, c["lat"] * 110574.0
+        grid.setdefault((int(x // cell), int(y // cell)), []).append((x, y, c["f"]["pA"]))
+    for c in cands:
+        if c["f"].get("pA") is None:
+            continue
+        x, y = c["lon"] * k, c["lat"] * 110574.0
+        gx, gy = int(x // cell), int(y // cell)
+        vals = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for (x2, y2, p) in grid.get((gx + dx, gy + dy), ())
+                if 0 < (x2 - x) ** 2 + (y2 - y) ** 2 <= radius_m ** 2]
+        c["f"]["pA_neigh"] = round(float(np.median(vals)), 4) if len(vals) >= min_n else None
+
+
 def feature_vector(c) -> dict:
     """Numeric evidence x_k (same names as weights) + text for each."""
     f = c["f"]
@@ -67,6 +111,8 @@ def feature_vector(c) -> dict:
     x: dict[str, tuple[float, str]] = {}
     lc, why = osm.lifecycle_strength(t)
     plc = c.get("parent_lifecycle", 0.0) or f.get("parent_lifecycle", 0.0)
+    if "OSM" not in c["sources"]:
+        plc = 0.0  # only real mapped buildings inherit "abandoned territory" (not stray MS polygons/detections)
     if plc and plc * 0.7 > lc:
         lc, why = plc * 0.7, "Внутри территории с OSM-тегом заброшенности (" + _ptags(c) + ")"
     if lc:
@@ -76,10 +122,16 @@ def feature_vector(c) -> dict:
             x["military_disused"] = (1.0, "Бывшая военная территория (OSM)")
         else:
             x["military_ctx"] = (1.0, "Военная территория/объект в OSM " + " ".join(f.get("military_tags") or []))
-    if f.get("outside_settlement"):
+    dense = dense_cluster(f) and c["kind"] not in ("deadend", "clearing")
+    if f.get("outside_settlement") and not dense:
         x["outside"] = (1.0, "Вне населённых пунктов и садоводств")
     elif f.get("in_dacha"):
         x["dacha"] = (1.0, "В садоводстве (дачи)")
+    if dense and not f.get("in_settlement"):
+        x["dense"] = (1.0, "Плотная застройка вокруг (похоже на садоводство/посёлок, даже если его нет в OSM)")
+    if t.get("building") in ("garage", "garages", "carport") or t.get("amenity") == "parking" \
+            or f.get("in_garages") or "garage" in str(t.get("disused:building", "")):
+        x["garages"] = (1.0, "Гаражи — обычно используются, выглядят «заброшенно» из-за ржавых крыш")
     if f.get("in_settlement"):
         x["settlement"] = (1.0, "В населённом пункте" + (f" ({f['near_place_name']})" if f.get("near_place_name") else ""))
     if c["kind"] == "farm":
@@ -138,14 +190,16 @@ def feature_vector(c) -> dict:
         x["zs_nobuilding"] = (_clip((f["zs_nobuilding"] - 0.5) / 0.4, 0, 1),
                               f"SigLIP: на снимке z18 скорее нет постройки ({f['zs_nobuilding']:.2f})")
     if f.get("pA") is not None and f.get("pA_trained"):
-        x["clfA"] = (_logit(f["pA"]), f"Классификатор по снимку z17: {f['pA']:.2f}")
+        v, txt = _relative(f["pA"], f.get("pA_neigh"))
+        x["clfA"] = (v, f"Классификатор по снимку z17: {f['pA']:.2f}" + txt)
     # ---- stage B
     if f.get("zs_abandoned") is not None:
         x["zs"] = (_logit(f["zs_abandoned"], -3, 3), f"SigLIP: «заброшено/руины» {f['zs_abandoned']:.2f}")
     if f.get("zs_cars") is not None and f["zs_cars"] >= 0.3:
         x["zs_cars"] = (f["zs_cars"], f"SigLIP: машины/техника во дворе {f['zs_cars']:.2f}")
     if f.get("pB") is not None and f.get("pB_trained"):
-        x["clfB"] = (_logit(f["pB"]), f"Классификатор по снимку z18: {f['pB']:.2f}")
+        v, txt = _relative(f["pB"], f.get("pA_neigh"))
+        x["clfB"] = (v, f"Классификатор по снимку z18: {f['pB']:.2f}" + txt)
     # ---- wayback
     if f.get("wb_veg_delta") is not None:
         dv = f["wb_veg_delta"]
@@ -233,78 +287,88 @@ def score(c, weights=None) -> tuple[float, list]:
 
 # ------------------------------------------------------------------------- guard
 def guard_status(c) -> tuple[str, list]:
+    """Red only with at least one STRONG sign of guarding/active use. Fences and gates from OSM alone are weak:
+    around abandoned objects they are often broken or long gone (their weight is halved there)."""
     f = c["f"]
     t = c["tags"]
-    pts = 0.0
-    R = []
-
-    def red(w, text):
-        nonlocal pts
-        pts += w
-        R.append({"w": w, "text": text})
-
-    if f.get("in_military"):
-        if f.get("military_disused"):
-            red(0.5, "Бывшая военная территория — может охраняться")
-        else:
-            red(2.0, "Военная территория по OSM " + " ".join(f.get("military_tags") or []))
+    strong, weak = [], []
+    if f.get("in_military") and not f.get("military_disused"):
+        strong.append((2.0, "Действующая военная территория по OSM " + " ".join(f.get("military_tags") or [])))
     acc = t.get("access") or f.get("access")
     if acc in ("private", "no", "military", "permit"):
-        red(1.5, f"Доступ ограничен: access={acc}")
-    if f.get("enclosed_by_fence"):
-        red(1.5, "Объект внутри замкнутого забора/стены (OSM barrier)")
-    elif f.get("fence_strong"):
-        red(1.0, "Забор или стена ближе 35 м (OSM barrier)")
-    elif f.get("fence_near"):
-        red(0.4, "Рядом ограждение (OSM barrier)")
+        strong.append((1.5, f"Доступ ограничен: access={acc}"))
     if f.get("guardhouse"):
-        red(2.0, f"Будка охраны/КПП в {f.get('guardhouse_dist', 0):.0f} м")
+        strong.append((2.0, f"Будка охраны/КПП в {f.get('guardhouse_dist', 0):.0f} м"))
     if f.get("strong_gate"):
-        red(1.2, f"Шлагбаум/КПП в {f.get('gate_dist', 0):.0f} м")
-    elif f.get("gates"):
-        red(0.6, f"Ворота ({', '.join(f['gates'])}) в {f.get('gate_dist', 0):.0f} м")
-    if f.get("in_industrial") and not f.get("industrial_disused"):
-        red(0.8, "Действующая промзона (landuse=industrial)")
-    if f.get("in_commercial") or f.get("in_retail"):
-        red(0.6, "Коммерческая территория")
-    if f.get("active_neighbours"):
-        red(0.5, "Рядом действующие объекты")
-    if f.get("in_settlement"):
-        red(0.3, "В населённом пункте — рядом жильцы")
+        strong.append((1.2, f"Шлагбаум/КПП в {f.get('gate_dist', 0):.0f} м"))
     if f.get("zs_cars") is not None and f["zs_cars"] >= 0.5:
-        red(1.0, f"На снимке машины/техника во дворе ({f['zs_cars']:.2f})")
+        strong.append((1.0, f"На снимке машины/техника во дворе ({f['zs_cars']:.2f})"))
     if f.get("wb_veg_delta") is not None and f["wb_veg_delta"] <= -0.12 and (f.get("wb_bprob_drop") or 0) < 0.15:
-        red(0.8, "Свежие следы использования: участок расчищен на последних снимках")
+        strong.append((0.8, "Свежие следы использования: участок расчищен на последних снимках"))
     vlm = f.get("vlm") if isinstance(f.get("vlm"), dict) else {}
-    for k, w, text in (("vehicles", 0.8, "VLM: видны машины/техника"), ("fence", 0.8, "VLM: виден забор/периметр"),
-                       ("guard_booth", 1.5, "VLM: видна будка охраны/шлагбаум"),
-                       ("signs_of_use", 0.8, "VLM: есть свежие следы использования")):
-        if vlm.get(k) is True:
-            red(w, text)
+    if vlm.get("guard_booth") is True:
+        strong.append((1.5, "VLM: видна будка охраны/шлагбаум"))
+    if vlm.get("vehicles") is True:
+        strong.append((0.8, "VLM: видны машины/техника"))
+    if vlm.get("signs_of_use") is True:
+        strong.append((0.8, "VLM: есть свежие следы использования"))
+    if f.get("in_military") and f.get("military_disused"):
+        weak.append((0.3, "Бывшая военная территория"))
+    if f.get("enclosed_by_fence"):
+        weak.append((1.0, "Объект внутри замкнутого забора/стены (OSM barrier)"))
+    elif f.get("fence_strong"):
+        weak.append((0.8, "Забор или стена ближе 35 м (OSM barrier)"))
+    elif f.get("fence_near"):
+        weak.append((0.3, "Рядом ограждение (OSM barrier)"))
+    if f.get("gates") and not f.get("strong_gate"):
+        weak.append((0.4, f"Ворота ({', '.join(f['gates'])}) в {f.get('gate_dist', 0):.0f} м"))
+    if vlm.get("fence") is True:
+        weak.append((0.6, "VLM: виден забор/периметр"))
+    if f.get("in_industrial") and not f.get("industrial_disused"):
+        weak.append((0.6, "Действующая промзона (landuse=industrial)"))
+    if f.get("in_commercial") or f.get("in_retail"):
+        weak.append((0.5, "Коммерческая территория"))
+    if f.get("active_neighbours"):
+        weak.append((0.4, "Рядом действующие объекты"))
+    if f.get("in_settlement") or dense_cluster(f):
+        weak.append((0.3, "Рядом жилые дома/участки — есть люди"))
 
-    if pts >= 2.0:
+    sc = c.get("score", 0)
+    clearly_abandoned = sc >= 0.7 or osm.lifecycle_strength(t)[0] >= 2.2
+    k = 0.5 if clearly_abandoned else 1.0
+    s_pts = sum(w for w, _ in strong)
+    w_pts = sum(w for w, _ in weak) * k
+    R = [{"w": round(w, 2), "text": txt} for w, txt in strong] + \
+        [{"w": round(w * k, 2), "text": txt + (" (объект заброшен — ограждение могло разрушиться, вес ×0.5)"
+                                               if k < 1 else "")} for w, txt in weak]
+    total = s_pts + w_pts
+    if strong and total >= 2.0:
         return "red", R
-    abandoned_evidence = (c.get("score", 0) >= 0.35)
-    no_barrier = not (f.get("fence_near") or f.get("gates") or f.get("guardhouse") or f.get("enclosed_by_fence"))
-    if pts < 0.6 and abandoned_evidence and no_barrier:
-        G = [{"w": 0, "text": "Ограждений, ворот и КПП рядом в OSM нет"}]
+    need = 0.6 if (dense_cluster(f) or f.get("in_dacha") or f.get("in_settlement")) else 0.35
+    if not strong and w_pts < 1.0 and sc >= need:
+        G = []
+        if not weak:
+            G.append({"w": 0, "text": "Ограждений, ворот и КПП рядом в OSM нет"})
+        else:
+            G.append({"w": 0, "text": f"Только слабые признаки ограждения (сумма {w_pts:.1f} < 1) — на месте проверьте"})
         if f.get("road_class") in ("track", "path", "footway", "unclassified", "service", "bridleway") or f.get("only_minor_roads_100m"):
             G.append({"w": 0, "text": f"Свободный подъезд ({f.get('road_class')})"})
         if f.get("zs_cars") is not None:
             G.append({"w": 0, "text": "Машин во дворе на снимке не видно"})
-        if f.get("tree_on") and f["tree_on"] > 0.15 or (f.get("veg_rel") or 0) > 0.5 or (f.get("wb_veg_delta") or 0) > 0.05:
-            G.append({"w": 0, "text": "Нет признаков использования: зарастание"})
         return "green", G + R
     if not R:
         R.append({"w": 0, "text": "Данных об охране нет — по умолчанию «неясно»"})
-    elif pts < 2.0:
-        R.append({"w": 0, "text": f"Признаков охраны недостаточно для красного (сумма {pts:.1f} < 2)"})
-    if not abandoned_evidence:
+    elif not strong:
+        R.append({"w": 0, "text": "Сильных признаков охраны (КПП, шлагбаум, действующая часть, машины, access=private) нет"})
+    else:
+        R.append({"w": 0, "text": f"Признаков охраны недостаточно для красного (сумма {total:.1f} < 2)"})
+    if sc < need:
         R.append({"w": 0, "text": "Балл заброшенности низкий — статус доступа не уточнялся"})
     return "yellow", R
 
 
 def apply(cands, weights=None):
+    neighbour_context(cands)
     for c in cands:
         c["score"], c["reasons"] = score(c, weights)
         c["guard"], c["guard_reasons"] = guard_status(c)

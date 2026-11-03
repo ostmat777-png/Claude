@@ -239,6 +239,10 @@ def run_search(job, run_id: int):
 
         stage(stage_names[-1])
         _rescore(cands, weights)
+        n_abs = C.absorb_satellites(cands, lp)
+        if n_abs:
+            job.info(f"Объединено мелких точек с соседними зданиями: {n_abs} (одна метка на объект)")
+        _rescore(cands, weights)
         keep = opts.get("min_score_keep", 0.03)
         stats["candidates"] = len(cands)
         stats["above_keep"] = sum(1 for c in cands if c["score"] >= keep)
@@ -277,6 +281,13 @@ def run_retrain(job, run_id=None):
     weights = training.fit_meta_weights(job, pool)
     job.set_stage(3, 3, "Пересчёт ранжирования")
     for rid, cs in all_c.items():
+        row = db.app_con().execute("SELECT geojson FROM runs WHERE id=?", (rid,)).fetchone()
+        try:
+            cen = area_from_geojson(db.loads(row["geojson"])).centroid
+            _rescore(cs, weights)
+            C.absorb_satellites(cs, LocalProj(cen.y, cen.x))
+        except Exception:
+            log.exception("absorb_satellites")
         _rescore(cs, weights)
         save_candidates(rid, cs)
     return {"runs": list(all_c), "candidates": len(pool)}

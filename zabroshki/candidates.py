@@ -222,7 +222,7 @@ def assemble(d: osm.OsmData, footprints_ll, lp: LocalProj, area_poly_ll, job=Non
         merged = False
         if bld_tree is not None:
             if g.geom_type == "Point":
-                hits = bld_tree.query(cm, predicate="dwithin", distance=8)
+                hits = bld_tree.query(cm, predicate="dwithin", distance=20)
                 for i in hits:
                     tgt = cands[bld_keys[i]]
                     for kk, vv in obj["tags"].items():
@@ -467,3 +467,113 @@ def _title(tags: dict) -> str:
     if not parts and tags.get("building"):
         parts.append("building=" + tags["building"])
     return ", ".join(parts)[:80]
+
+
+def _is_satellite(c) -> bool:
+    """Weak, footprint-less or unconfirmed candidates that usually describe a part of a nearby object."""
+    f = c["f"]
+    if c["kind"] in ("deadend", "clearing"):
+        return True
+    if c.get("footprint") is None:
+        return True
+    ms_only = "OSM" not in c["sources"] and "MS Footprints" in c["sources"]
+    if ms_only and ((f.get("bprob") or 0) < 0.3 or (f.get("area_m2") or 99) < 15):
+        return True
+    return False
+
+
+def absorb_satellites(cands, lp: LocalProj, radius=25.0):
+    """One object = one marker: merge satellites into the best nearby real building within `radius` m."""
+    import math as _m
+    mains = [c for c in cands if not _is_satellite(c)]
+    if not mains:
+        return cands
+    cell = radius
+    grid: dict = {}
+    for c in mains:
+        x, y = lp.fwd(c["lon"], c["lat"])
+        grid.setdefault((int(x // cell), int(y // cell)), []).append((x, y, c))
+    out = []
+    absorbed = 0
+    for c in cands:
+        if not _is_satellite(c):
+            out.append(c)
+            continue
+        x, y = lp.fwd(c["lon"], c["lat"])
+        r = 60.0 if c["kind"] == "deadend" else radius
+        best, bd = None, r
+        gx, gy = int(x // cell), int(y // cell)
+        rng = 3 if r > cell else 1
+        for dx in range(-rng, rng + 1):
+            for dy in range(-rng, rng + 1):
+                for (x2, y2, m) in grid.get((gx + dx, gy + dy), ()):
+                    d = _m.hypot(x2 - x, y2 - y)
+                    if m.get("footprint") is not None:
+                        try:
+                            from shapely.geometry import Point as _P
+                            d = min(d, lp.geom_to_m(m["footprint"]).distance(_P(x, y)))
+                        except Exception:
+                            pass
+                    if d <= bd:
+                        best, bd = m, d
+        if best is None:
+            out.append(c)
+            continue
+        absorbed += 1
+        best["sources"] |= set(c["sources"])
+        bf = best["f"]
+        bf["satellites"] = bf.get("satellites", 0) + 1
+        if c["kind"] == "deadend":
+            bf["dead_end_near"] = True
+        if c["kind"] == "clearing" or c["f"].get("on_clearing"):
+            bf["on_clearing"] = True
+        for kk, vv in c["tags"].items():
+            best["tags"].setdefault(kk, vv)
+    cands[:] = out
+    absorbed += absorb_annexes(cands, lp)
+    return absorbed
+
+
+def absorb_annexes(cands, lp: LocalProj, radius=40.0, small_m2=120.0):
+    """Small buildings (sheds, annexes) next to a clearly bigger building of a similar or higher score are
+    shown as parts of one complex. Must run after scoring (uses c['score']); tags are NOT copied."""
+    import math as _m
+    if not cands or "score" not in cands[0]:
+        return 0
+    big = [c for c in cands if c.get("footprint") is not None and (c["f"].get("area_m2") or 0) >= small_m2]
+    cell = radius + 60
+    grid: dict = {}
+    for c in big:
+        x, y = lp.fwd(c["lon"], c["lat"])
+        grid.setdefault((int(x // cell), int(y // cell)), []).append((x, y, c))
+    out, n = [], 0
+    for c in cands:
+        a = c["f"].get("area_m2") or 0
+        if c.get("footprint") is None or a >= small_m2 or a == 0:
+            out.append(c)
+            continue
+        x, y = lp.fwd(c["lon"], c["lat"])
+        gx, gy = int(x // cell), int(y // cell)
+        best, bd = None, radius
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for (x2, y2, m) in grid.get((gx + dx, gy + dy), ()):
+                    if (m["f"].get("area_m2") or 0) < 2 * a or m.get("score", 0) < c.get("score", 0) - 0.1:
+                        continue
+                    d = _m.hypot(x2 - x, y2 - y)
+                    if d > radius + 60:
+                        continue
+                    try:  # distance to the big building's outline, not to its centre
+                        d = lp.geom_to_m(m["footprint"]).distance(lp.geom_to_m(c["footprint"]))
+                    except Exception:
+                        pass
+                    if d <= bd:
+                        best, bd = m, d
+        if best is None:
+            out.append(c)
+            continue
+        n += 1
+        best["f"]["annexes"] = best["f"].get("annexes", 0) + 1
+        best["sources"] |= set(c["sources"])
+    cands[:] = out
+    return n
