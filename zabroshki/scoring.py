@@ -39,8 +39,14 @@ DEFAULT_WEIGHTS = {
     "wb_change": 0.4,
     "vlm": 0.7,
     "kind_deadend": -0.6,
-    "kind_clearing": -0.3,
+    "kind_clearing": -1.0,
+    "zs_nobuilding": -1.5,
 }
+
+# Evidence that is meaningless (tautological or out-of-distribution) for candidates that are not a known building:
+# a forest clearing is surrounded by forest by definition; image-only detections are only searched under tree cover;
+# the abandonment classifiers were trained on buildings, not on bogs and meadows.
+NOT_FOR_POINTS = {"forest", "overgrowth", "tree_on_roof", "no_paths", "clfA", "clfB", "zs", "isolated"}
 
 
 def _logit(p, lo=-4.0, hi=4.0):
@@ -123,7 +129,11 @@ def feature_vector(c) -> dict:
     if f.get("on_clearing") or c["kind"] == "clearing":
         x["clearing"] = (1.0, "Прогалина в лесу" + (f" ~{f['clearing_area_m2']:.0f} м²" if f.get("clearing_area_m2") else ""))
     if f.get("image_detected") and "OSM" not in c["sources"]:
-        x["image_detected"] = (1.0, "Постройка распознана на снимке")
+        b = f.get("bprob") or 0.75
+        x["image_detected"] = (_clip((b - 0.7) / 0.3, 0.2, 1), f"Постройка распознана на снимке (детектор {b:.2f})")
+    if c.get("footprint") is None and f.get("zs_nobuilding") is not None and f["zs_nobuilding"] >= 0.5:
+        x["zs_nobuilding"] = (_clip((f["zs_nobuilding"] - 0.5) / 0.4, 0, 1),
+                              f"SigLIP: на снимке z18 скорее нет постройки ({f['zs_nobuilding']:.2f})")
     if f.get("pA") is not None and f.get("pA_trained"):
         x["clfA"] = (_logit(f["pA"]), f"Классификатор по снимку z17: {f['pA']:.2f}")
     # ---- stage B
@@ -156,7 +166,13 @@ def feature_vector(c) -> dict:
     if c["kind"] == "deadend":
         x["kind_deadend"] = (1.0, "Только конец тупиковой дороги (постройка не найдена)")
     if c["kind"] == "clearing":
-        x["kind_clearing"] = (1.0, "Только прогалина (постройка не подтверждена)")
+        b = f.get("bprob") or 0
+        x["kind_clearing"] = (1.0 if b < 0.5 else 0.4, "Только прогалина (постройка не подтверждена)"
+                              if b < 0.5 else f"Прогалина, на снимке похоже на остатки постройки (детектор {b:.2f})")
+    known_building = c.get("footprint") is not None or lc > 0
+    if not known_building:
+        for k in NOT_FOR_POINTS:
+            x.pop(k, None)
     return x
 
 

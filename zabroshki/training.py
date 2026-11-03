@@ -196,9 +196,12 @@ def build_training_points(cands, opts, rng=None):
     n_pos_all = sum(1 for p in pts if p[2] == 1)
     # automatic negatives: random ordinary houses in settlements / dachas
     labeled_pos = [{"lat": p[0], "lon": p[1]} for p in pts if p[2] == 1]
+    # "Ordinary buildings of the region": any mapped building (OSM or Microsoft footprint) without
+    # lifecycle tags — in towns, dachas AND in the countryside. Taking negatives only from settlements
+    # teaches the classifier "not a settlement = abandoned" instead of what an abandoned building looks like.
     pool = [c for c in cands
-            if c["kind"] in ("house", "building", "industrial", "farm")
-            and (c["f"].get("in_settlement") or c["f"].get("in_dacha"))
+            if c["kind"] in ("house", "building", "industrial", "farm", "unmapped")
+            and c.get("footprint") is not None
             and not osm.is_lifecycle(c["tags"]) and not c.get("parent_lifecycle")
             and not c["f"].get("in_military")]
     rng.shuffle(pool)
