@@ -61,9 +61,9 @@ if errorlevel 1 goto fail
 
 :models
 copy /y "requirements.txt" "%VENV%\req.txt" >nul
-echo [5/5] Downloading neural models (DINOv2, SigLIP, ~1 GB)...
-"%PY%" -m zabroshki prefetch-models
 echo ok> "%VENV%\.installed"
+echo [5/5] Downloading neural models (DINOv2, SigLIP, ~1 GB)... (if it hangs: close the window and start run.bat again)
+"%PY%" -m zabroshki prefetch-models
 echo Installation finished.
 goto run
 
