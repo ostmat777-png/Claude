@@ -48,6 +48,13 @@ GROUPS = [
     ("highways", """
   way["highway"];
 """, 0.06, OUT),
+    # active / protected places: parks, museums, reserves, monuments — never "abandoned objects" for the user
+    ("leisure", """
+  nwr["leisure"~"^(park|garden|nature_reserve|recreation_ground|playground|sports_centre|stadium)$"];
+  nwr["boundary"="protected_area"];
+  nwr["tourism"~"^(museum|attraction|zoo|theme_park|gallery|camp_site)$"];
+  nwr["historic"~"^(monument|memorial|castle|manor|church|city_gate|citywalls|fort|archaeological_site)$"];
+""", 0.12, OUT),
 ]
 
 
@@ -240,12 +247,82 @@ def element_geometry(el):
     return None
 
 
-def is_lifecycle(tags: dict) -> bool:
+_CONSTR_WORDS = ("строительство", "стройка", "стройплощад", "жилой комплекс", "жк ", "жк\u00a0", "реконструкция")
+
+
+def is_construction(tags: dict) -> bool:
+    """Active construction / redevelopment site (often still tagged landuse=brownfield in OSM)."""
+    if tags.get("landuse") == "construction" or tags.get("building") == "construction":
+        return True
+    if tags.get("construction") not in (None, "no") and not tags.get("highway"):
+        return True
+    if "building" in tags:   # names of buildings ("строительный техникум") say nothing about the site state
+        return False
+    txt = " " + " ".join(str(tags.get(k, "")) for k in ("name", "description", "note")).lower() + " "
+    return any(w in txt for w in _CONSTR_WORDS)
+
+
+LC_PREFIXES = ("abandoned", "disused", "ruins")
+GONE_PREFIXES = ("was", "demolished", "removed", "razed", "destroyed")
+# uses that occupy a whole building / site: "disused:amenity=school" means the school building stands empty
+WHOLE_AMENITY = {"school", "kindergarten", "childcare", "hospital", "clinic", "sanatorium", "cinema", "theatre",
+                 "community_centre", "library", "prison", "university", "college", "townhall", "social_facility",
+                 "nursing_home", "place_of_worship", "monastery", "fire_station", "police", "bus_station",
+                 "arts_centre", "public_bath", "courthouse", "events_venue", "dormitory", "conference_centre"}
+SITE_MAN_MADE = {"works", "water_tower", "tower", "chimney", "silo", "bunker_silo", "lighthouse", "pumping_station",
+                 "wastewater_plant", "water_works", "gasometer", "kiln", "observatory", "mineshaft", "storage_tank"}
+SITE_TOURISM = {"hotel", "motel", "hostel", "guest_house", "chalet", "alpine_hut", "camp_site", "museum"}
+SITE_LEISURE = {"sports_centre", "stadium", "resort", "ice_rink", "sports_hall", "summer_camp"}
+SITE_HISTORIC = {"ruins", "fort", "bunker", "castle", "manor", "monastery", "military", "church"}
+FEATURE_KEYS = ("building", "amenity", "shop", "office", "craft", "man_made", "railway", "highway", "barrier", "power",
+                "military", "landuse", "leisure", "tourism", "historic", "aeroway", "waterway", "place", "industrial",
+                "cuisine", "healthcare", "club", "public_transport", "bridge", "emergency", "vending", "atm")
+
+
+def _site_feature(base: str, v: str) -> bool:
+    """Is this feature a whole building/site (vs. a shop or office inside a house, a fountain, a platform …)?"""
+    if base in ("building", "military", "landuse", "industrial"):
+        return True
+    return v in {"amenity": WHOLE_AMENITY, "man_made": SITE_MAN_MADE, "tourism": SITE_TOURISM,
+                 "leisure": SITE_LEISURE, "historic": SITE_HISTORIC,
+                 "railway": {"station"}, "aeroway": {"hangar", "terminal"}}.get(base, ())
+
+
+def _features(tags: dict) -> list:
+    out = []
     for k, v in tags.items():
-        if k in ("abandoned", "disused", "ruins") and v not in ("no",):
-            return True
-        if any(k.startswith(p + ":") for p in LIFECYCLE_PREFIXES[:4]):
-            return True
+        pre, _, base = k.partition(":")
+        key = base if base and pre in LC_PREFIXES + GONE_PREFIXES else k
+        if key in FEATURE_KEYS:
+            out.append((key, v))
+    return out
+
+
+def site_lifecycle(tags: dict) -> dict:
+    """Lifecycle tags that describe a whole building or site. A closed shop/office/cafe inside a working house
+    (disused:shop=…), an abandoned fountain/well/platform or an object that no longer exists (was:/demolished:)
+    say nothing about an abandoned building and are ignored."""
+    feats = _features(tags)
+    site_feat = any(_site_feature(b, v) for b, v in feats)
+    out = {}
+    for k, v in tags.items():
+        if v in ("no", "false"):
+            continue
+        if k in LC_PREFIXES:
+            if site_feat or not feats:
+                out[k] = v
+            continue
+        pre, _, base = k.partition(":")
+        if pre in LC_PREFIXES and base and _site_feature(base.split(":")[0], v):
+            out[k] = v
+    return out
+
+
+def is_lifecycle(tags: dict) -> bool:
+    if tags.get("landuse") == "brownfield" and is_construction(tags):
+        return False
+    if site_lifecycle(tags):
+        return True
     if tags.get("building") == "ruins" or tags.get("historic") == "ruins" or tags.get("landuse") == "brownfield":
         return True
     return False
@@ -259,28 +336,22 @@ def lifecycle_strength(tags: dict) -> tuple[float, str]:
         nonlocal best, why
         if w > best:
             best, why = w, t
+    site = site_lifecycle(tags)
     for k, v in tags.items():
         kv = f"{k}={v}"
+        pre, _, base = k.partition(":")
         if k == "building" and v == "ruins":
             take(3.2, "OSM: building=ruins (руины)")
         elif k == "historic" and v == "ruins":
             take(3.0, "OSM: historic=ruins")
-        elif k == "ruins" and v != "no":
-            take(3.0, f"OSM: {kv}")
-        elif k.startswith("ruins:"):
-            take(3.0, f"OSM: {kv}")
-        elif k == "abandoned" and v != "no":
-            take(3.0, f"OSM: {kv} (заброшено)")
-        elif k.startswith("abandoned:"):
-            take(3.0, f"OSM: {kv} (заброшено)")
-        elif k == "disused" and v != "no":
+        elif k in site and pre in ("ruins", "abandoned"):
+            take(3.0, f"OSM: {kv}" + (" (заброшено)" if pre == "abandoned" else ""))
+        elif k in site and pre == "disused":
             take(2.2, f"OSM: {kv} (не используется)")
-        elif k.startswith("disused:"):
-            take(2.2, f"OSM: {kv} (не используется)")
-        elif k == "landuse" and v == "brownfield":
+        elif k == "landuse" and v == "brownfield" and not is_construction(tags):
             take(1.6, "OSM: landuse=brownfield (заброшенная промплощадка)")
-        elif k.startswith("was:") or k.startswith("demolished:"):
-            take(0.8, f"OSM: {kv} (бывший объект)")
+        elif pre == "was" and base and "building" in tags and base != "building" and _site_feature(base, v):
+            take(0.8, f"OSM: {kv} (здание раньше использовалось иначе)")
         elif k == "building" and v in ("collapsed", "damaged", "abandoned"):
             take(3.0, f"OSM: {kv}")
         elif k == "condition" and v in ("deficient", "poor", "ruins"):
@@ -337,8 +408,19 @@ def parse(elements) -> OsmData:
         if ("military" in tags or tags.get("landuse") == "military") and geom() is not None:
             d.military.append({"id": oid, "geom": geom(), "tags": tags})
         lu = tags.get("landuse")
+        if lu == "brownfield" and is_construction(tags):
+            lu = "construction"   # a redevelopment site, not an abandoned one
         if lu and geom() is not None and geom().geom_type in ("Polygon", "MultiPolygon"):
             d.landuse.setdefault(lu, []).append((geom(), tags, oid))
+        extra = None
+        if tags.get("leisure") in ("park", "garden", "recreation_ground", "playground", "sports_centre", "stadium"):
+            extra = "park"
+        elif tags.get("leisure") == "nature_reserve" or tags.get("boundary") == "protected_area":
+            extra = "protected"
+        elif tags.get("tourism") in ("museum", "attraction", "zoo", "theme_park", "gallery", "camp_site"):
+            extra = "museum"
+        if extra and geom() is not None and geom().geom_type in ("Polygon", "MultiPolygon"):
+            d.landuse.setdefault(extra, []).append((geom(), tags, oid))
         if "place" in tags and geom() is not None:
             p = geom() if geom().geom_type == "Point" else geom().centroid
             pl = tags["place"]

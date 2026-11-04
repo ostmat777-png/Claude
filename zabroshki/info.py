@@ -297,7 +297,8 @@ def auto_description(r: dict, f: dict, tags: dict) -> list:
     """Plain-language summary of what the program itself knows about the object."""
     TYPE = {"house": "дом/дача", "industrial": "промышленное здание", "farm": "сельхоз-постройка", "ruins": "руины",
             "military": "военный объект", "building": "постройка", "unmapped": "постройка, которой нет на картах",
-            "clearing": "прогалина в лесу", "deadend": "конец тупиковой дороги", "area": "территория"}
+            "clearing": "прогалина в лесу", "deadend": "конец тупиковой дороги", "area": "территория",
+            "complex": "территория из нескольких зданий"}
     out = []
     s = TYPE.get(r["kind"], r["kind"])
     if f.get("area_m2"):

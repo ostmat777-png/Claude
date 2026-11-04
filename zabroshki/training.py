@@ -136,6 +136,8 @@ def _model_meta(name):
 
 def load_meta_weights():
     obj, meta = _load_model("meta_weights")
+    if obj is None or (meta or {}).get("version") != scoring.SCORING_VERSION:
+        return None  # learned for an older evidence model
     return obj
 
 
@@ -431,7 +433,7 @@ def fit_meta_weights(job, pool):
     weights = {k: round(float(v), 3) for k, v in zip(names, wv)}
     changed = sorted(((k, weights[k] - scoring.DEFAULT_WEIGHTS[k]) for k in names), key=lambda t: -abs(t[1]))[:5]
     desc = f"по {n1}+{n0} отметкам; сильнее всего изменены: " + ", ".join(f"{k} {d:+.2f}" for k, d in changed)
-    _save_model("meta_weights", weights, {"desc": desc})
+    _save_model("meta_weights", weights, {"desc": desc, "version": scoring.SCORING_VERSION})
     job.info("Веса признаков: " + desc)
     return weights
 

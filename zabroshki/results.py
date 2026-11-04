@@ -33,7 +33,8 @@ def find_label(grid, lat, lon, radius_m=15.0):
 def compact_candidates(run_id: int, min_score: float = 0.0):
     keep = max(min_score, settings().get("min_score_keep", 0.03))
     rows = db.app_con().execute(
-        "SELECT id, lat, lon, score, guard, kind, title, json_extract(features, '$.confirm_n') AS cn "
+        "SELECT id, lat, lon, score, guard, kind, title, json_extract(features, '$.confirm_n') AS cn, "
+        "json_extract(features, '$.reliable') AS rel, json_extract(features, '$.complex_key') AS ck "
         "FROM candidates WHERE run_id=? AND score>=? ORDER BY score DESC",
         (run_id, keep)).fetchall()
     grid = label_index()
@@ -41,8 +42,17 @@ def compact_candidates(run_id: int, min_score: float = 0.0):
     for r in rows:
         lb = find_label(grid, r["lat"], r["lon"]) if grid else None
         items.append([r["id"], round(r["lat"], 6), round(r["lon"], 6), round(r["score"], 4), r["guard"], r["kind"],
-                      r["title"] or "", lb["label"] if lb else None, r["cn"] or 0])
+                      r["title"] or "", lb["label"] if lb else None, r["cn"] or 0, 1 if r["rel"] else 0,
+                      1 if r["ck"] else 0])
     return {"run_id": run_id, "items": items}
+
+
+def complexes_geojson(run_id: int):
+    rows = db.app_con().execute(
+        "SELECT id, score, guard, footprint, json_extract(features, '$.reliable') AS rel FROM candidates "
+        "WHERE run_id=? AND kind='complex'", (run_id,)).fetchall()
+    return [{"id": r["id"], "score": r["score"], "guard": r["guard"], "reliable": 1 if r["rel"] else 0,
+             "geometry": db.loads(r["footprint"])} for r in rows if r["footprint"]]
 
 
 def candidate_detail(cid: int):
@@ -74,6 +84,8 @@ def candidate_detail(cid: int):
         "label": lb["label"] if lb else None,
         "google_maps": google_maps_url(r["lat"], r["lon"]), "osm_url": osm_url(r["lat"], r["lon"]),
         "features": {k: v for k, v in f.items() if not isinstance(v, (dict, list)) or k in ("gates", "landuse")},
+        "reliable": bool(f.get("reliable")), "members": _members(r["run_id"], f.get("members") or []),
+        "footprint": db.loads(r["footprint"]),
     }
 
 
@@ -86,8 +98,16 @@ def candidate_image(cid: int, src: str = "current", zoom: int | None = None, siz
     provider = settings()["imagery_provider"] if src == "current" else src
     if provider.startswith("wayback:"):
         z = zoom or settings()["scan_zoom"] + 1
+    fp0 = db.loads(r["footprint"])
+    if fp0 and not zoom:
+        from shapely.geometry import shape as _shape
+        from .geo import meters_per_pixel
+        b = _shape(fp0).bounds
+        ext = max((b[2] - b[0]) * 111320 * 0.49, (b[3] - b[1]) * 110574)  # metres (~60°N)
+        while z > 14 and ext / meters_per_pixel(r["lat"], z) > 300:
+            z -= 1
     # crop footprint: ~110 m at z18, keep requested output size
-    native = 384 if z >= 18 else 256
+    native = 384 if z >= 18 else 320
     img, valid = tiles.crop_lonlat(provider, z, r["lon"], r["lat"], native)
     if valid < 0.2 and z > 16:
         z -= 1
@@ -114,3 +134,15 @@ def candidate_image(cid: int, src: str = "current", zoom: int | None = None, siz
     b = io.BytesIO()
     im.save(b, format="JPEG", quality=88)
     return b.getvalue()
+
+
+def _members(run_id, idxs):
+    if not idxs:
+        return []
+    from .pipeline import ID_STRIDE
+    ids = [run_id * ID_STRIDE + int(i) for i in idxs]
+    q = ",".join("?" * len(ids))
+    rows = db.app_con().execute(f"SELECT id, score, guard, kind, title, json_extract(features, '$.reliable') AS rel "
+                                f"FROM candidates WHERE id IN ({q}) ORDER BY score DESC", ids).fetchall()
+    return [{"id": r["id"], "score": r["score"], "guard": r["guard"], "kind": r["kind"], "title": r["title"],
+             "reliable": bool(r["rel"])} for r in rows]

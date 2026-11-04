@@ -142,3 +142,10 @@ h4 { margin: 10px 0 2px; }
 
 @media (max-width: 1750px) { #areaInfo { display: none; } }
 @media (max-width: 1500px) { .lbl { display: none; } #progress { min-width: 160px; } }
+
+.relbadge { color: #00e5ff; font-weight: 700; margin: 2px 0 4px; }
+.members { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
+.manual-mark { font-size: 18px; line-height: 20px; text-align: center; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+.manual-mark.yes { color: #ffd84d; }
+.manual-mark.no { color: #bbb; }
+.mm button { margin: 4px 2px; }

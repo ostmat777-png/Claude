@@ -5,6 +5,7 @@ const TYPE_NAMES = {
   house: 'Дом / дача', industrial: 'Промздание', farm: 'Ферма / с/х', ruins: 'Руины',
   military: 'Военный объект', building: 'Постройка (прочее)', unmapped: 'Постройка по снимку',
   clearing: 'Прогалина в лесу', deadend: 'Тупик дороги', area: 'Территория (brownfield…)',
+  complex: 'Территория / комплекс',
 };
 const GUARD_NAMES = { red: 'Охраняется / закрыто', yellow: 'Неясно', green: 'Свободный доступ' };
 const COLORS = { red: '#e5383b', yellow: '#f4c430', green: '#2dc653' };
@@ -12,7 +13,7 @@ const COLORS = { red: '#e5383b', yellow: '#f4c430', green: '#2dc653' };
 const S = {
   map: null, base: 'sat', layers: {}, areaLayer: null, drawer: null,
   runId: null, cands: [], markers: null, markerById: new Map(), selected: null,
-  filters: { guard: { red: true, yellow: true, green: true }, minScore: 0.25, types: {}, onlyUnlabeled: false, onlyConfirmed: false },
+  filters: { guard: { red: true, yellow: true, green: true }, minScore: 0.25, types: {}, onlyUnlabeled: false, onlyReliable: true, showParts: false },
   polling: null, lastJobState: 'idle', settings: null,
 };
 
@@ -45,7 +46,11 @@ function initMap() {
   L.control.scale({ imperial: false }).addTo(map);
 
   S.areaLayer = new L.FeatureGroup().addTo(map);
+  S.complexLayer = L.layerGroup().addTo(map);
   S.markers = L.layerGroup().addTo(map);
+  S.highlight = L.layerGroup().addTo(map);
+  S.manualLayer = L.layerGroup().addTo(map);
+  map.on('contextmenu', (e) => manualMenu(e.latlng));
 
   map.on(L.Draw.Event.CREATED, (e) => {
     S.areaLayer.clearLayers();
@@ -313,7 +318,8 @@ async function selectRun(id, fit) {
 async function loadCandidates() {
   if (!S.runId) return;
   const data = await api(`/api/runs/${S.runId}/candidates`);
-  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7], conf: a[8] || 0 }));
+  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7], conf: a[8] || 0, rel: !!a[9], part: !!a[10] }));
+  loadComplexes();
   buildTypeChecks();
   renderCandidates();
 }
@@ -336,7 +342,8 @@ function passes(c) {
   if (c.score < f.minScore) return false;
   if (f.types[c.type] === false) return false;
   if (f.onlyUnlabeled && c.label != null) return false;
-  if (f.onlyConfirmed && c.conf < 2) return false;
+  if (f.onlyReliable && !c.rel) return false;
+  if (!f.showParts && c.part) return false;
   return true;
 }
 
@@ -362,7 +369,9 @@ function renderCandidates() {
     S.markerById.set(c.id, m);
   }
   ['red', 'yellow', 'green'].forEach((g) => { $('#cnt-' + g).textContent = cnt[g] || 0; });
-  $('#shownCount').textContent = `показано ${shown.length} из ${S.cands.length}`;
+  const nrel = S.cands.filter((c) => c.rel && !c.part).length;
+  $('#shownCount').textContent = `показано ${shown.length} · надёжных ${nrel} · всего ${S.cands.length}`;
+  drawComplexes(shown);
   const list = shown.slice().reverse().slice(0, 400);
   $('#list').innerHTML = list.map((c) => `
     <div class="item ${S.selected === c.id ? 'sel' : ''}" data-id="${c.id}">
@@ -372,6 +381,56 @@ function renderCandidates() {
         ${c.label === 1 ? '<span class="lb">✔ заброшка</span>' : c.label === 0 ? '<span class="lb">✘ не заброшка</span>' : ''}</span>
     </div>`).join('') + (shown.length > 400 ? `<div class="muted" style="padding:6px">… и ещё ${shown.length - 400} (уточните фильтры)</div>` : '');
   $$('#list .item').forEach((el) => el.addEventListener('click', () => selectCandidate(+el.dataset.id, true)));
+}
+
+/* ------------------------------------------------------------------ territories (complexes) */
+async function loadComplexes() {
+  if (!S.runId) return;
+  try { S.complexes = await api(`/api/runs/${S.runId}/complexes`); } catch (e) { S.complexes = []; }
+  renderCandidates();
+}
+
+function drawComplexes(shown) {
+  S.complexLayer.clearLayers();
+  const ids = new Set(shown.map((c) => c.id));
+  for (const cx of (S.complexes || [])) {
+    if (!ids.has(cx.id) || !cx.geometry) continue;
+    const l = L.geoJSON(cx.geometry, { style: { color: COLORS[cx.guard] || COLORS.yellow, weight: 2, dashArray: '5 4', fillOpacity: 0.07 } });
+    l.on('click', () => selectCandidate(cx.id));
+    l.addTo(S.complexLayer);
+  }
+}
+
+/* ------------------------------------------------------------------ manual marks (missed objects) */
+function manualMenu(latlng) {
+  const html = `<div class="mm"><b>${latlng.lat.toFixed(5)}, ${latlng.lng.toFixed(5)}</b><br>
+    <button id="mmYes">✔ Здесь заброшка</button> <button id="mmNo">✘ Не заброшка</button>
+    <div class="muted small">Отметка станет примером для дообучения и проверки качества.</div></div>`;
+  const pop = L.popup().setLatLng(latlng).setContent(html).openOn(S.map);
+  setTimeout(() => {
+    const send = async (label) => {
+      await api('/api/labels/manual', { method: 'POST', body: { lat: latlng.lat, lon: latlng.lng, label } });
+      S.map.closePopup(pop); loadManual(); loadModelInfo();
+    };
+    $('#mmYes').onclick = () => send(1);
+    $('#mmNo').onclick = () => send(0);
+  }, 0);
+}
+
+async function loadManual() {
+  let labels = [];
+  try { labels = await api('/api/labels'); } catch (e) { return; }
+  S.manualLayer.clearLayers();
+  for (const l of labels) {
+    const icon = L.divIcon({ className: 'manual-mark ' + (l.label ? 'yes' : 'no'), html: l.label ? '★' : '✕', iconSize: [20, 20] });
+    const m = L.marker([l.lat, l.lon], { icon, title: (l.label ? 'Ваша отметка: заброшка' : 'Ваша отметка: не заброшка') });
+    m.bindPopup(`${l.label ? '★ Заброшка' : '✕ Не заброшка'} (${esc(l.note || 'отметка')})<br><button data-del="${l.id}">удалить отметку</button>`);
+    m.on('popupopen', (e) => {
+      const b = e.popup.getElement().querySelector('button[data-del]');
+      if (b) b.onclick = async () => { await api('/api/labels/' + l.id, { method: 'DELETE' }); S.map.closePopup(); loadManual(); };
+    });
+    m.addTo(S.manualLayer);
+  }
 }
 
 /* ------------------------------------------------------------------ detail */
@@ -391,6 +450,7 @@ async function selectCandidate(id, pan) {
   let d;
   try { d = await api('/api/candidates/' + id); } catch (e) { $('#detail').innerHTML = 'Ошибка: ' + esc(e.message); return; }
   renderDetail(d);
+  if (pan && !m) S.map.setView([d.lat, d.lon], Math.max(S.map.getZoom(), 17));
 }
 
 function reasonRows(list) {
@@ -415,6 +475,9 @@ function renderDetail(d) {
       <div><span class="scorebig">${(d.score * 100).toFixed(0)}</span><span class="muted"> / 100 балл заброшенности</span></div>
       <span class="badge ${d.guard}">${GUARD_NAMES[d.guard] || d.guard}</span>
     </div>
+    ${d.reliable ? '<div class="relbadge">✔ Надёжная метка</div>' : '<div class="muted small">Ненадёжная метка — показывается только при снятой галочке «только надёжные»</div>'}
+    ${(d.members || []).length ? `<h4>Здания территории (${d.members.length})</h4><div class="members">${d.members.map((m) =>
+      `<div class="item" data-mid="${m.id}"><span class="dot ${m.guard}"></span><span class="sc">${(m.score * 100).toFixed(0)}${m.reliable ? '<span class="conf">✔</span>' : ''}</span><span class="tt">${esc(TYPE_NAMES[m.kind] || m.kind)} · <span class="muted">${esc(m.title || '')}</span></span></div>`).join('')}</div>` : ''}
     <div class="labelbtns">
       <button class="yes ${d.label === 1 ? 'on' : ''}" id="lblYes">Заброшка</button>
       <button class="no ${d.label === 0 ? 'on' : ''}" id="lblNo">Не заброшка</button>
@@ -447,6 +510,10 @@ function renderDetail(d) {
   $('#copyLL').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(ll); };
   $$('#detail img').forEach((im) => im.addEventListener('click', () => showBig(im.src.replace(/size=\d+/, 'size=768'), im.dataset.cap)));
   loadInfo(d.id, false);
+  $$('#detail .members .item').forEach((el) => el.addEventListener('click', () => selectCandidate(+el.dataset.mid, true)));
+  S.highlight.clearLayers();
+  if (d.footprint) L.geoJSON(d.footprint, { style: { color: '#00e5ff', weight: 3, fillOpacity: 0.12 } }).addTo(S.highlight);
+  else L.circleMarker([d.lat, d.lon], { radius: 14, color: '#00e5ff', weight: 3, fill: false }).addTo(S.highlight);
 }
 
 async function loadInfo(id, refresh) {
@@ -602,7 +669,7 @@ async function saveOpts() {
 async function doExport(fmt) {
   if (!S.runId) return alert('Нет результатов для экспорта.');
   const filters = { guard: Object.keys(S.filters.guard).filter((g) => S.filters.guard[g]), min_score: S.filters.minScore,
-    types: Object.keys(S.filters.types).filter((t) => S.filters.types[t]), only_unlabeled: S.filters.onlyUnlabeled, only_confirmed: S.filters.onlyConfirmed };
+    types: Object.keys(S.filters.types).filter((t) => S.filters.types[t]), only_unlabeled: S.filters.onlyUnlabeled, only_reliable: S.filters.onlyReliable, show_parts: S.filters.showParts };
   try {
     const r = await api('/api/export', { method: 'POST', body: { run_id: S.runId, format: fmt, filters } });
     $('#exportMsg').innerHTML = `Сохранено: <code>${esc(r.path)}</code> · <a href="/api/export/download?name=${encodeURIComponent(r.name)}" download>скачать</a> · <a href="#" id="openFolder">открыть папку</a>`;
@@ -650,7 +717,8 @@ function wire() {
   $$('#colorChips input').forEach((i) => i.addEventListener('change', () => { S.filters.guard[i.dataset.guard] = i.checked; renderCandidates(); }));
   $('#scoreSlider').addEventListener('input', (e) => { S.filters.minScore = +e.target.value; $('#scoreVal').textContent = (+e.target.value).toFixed(2); renderCandidates(); });
   $('#onlyUnlabeled').onchange = (e) => { S.filters.onlyUnlabeled = e.target.checked; renderCandidates(); };
-  $('#onlyConfirmed').onchange = (e) => { S.filters.onlyConfirmed = e.target.checked; renderCandidates(); };
+  $('#onlyReliable').onchange = (e) => { S.filters.onlyReliable = e.target.checked; renderCandidates(); };
+  $('#showParts').onchange = (e) => { S.filters.showParts = e.target.checked; renderCandidates(); };
   $$('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $$('.export button').forEach((b) => b.addEventListener('click', () => doExport(b.dataset.fmt)));
   $('#btnRetrain').onclick = async () => {
@@ -680,4 +748,5 @@ window.addEventListener('DOMContentLoaded', async () => {
   renderJob(j);
   if (['running', 'paused', 'pending'].includes(j.state)) { S.runId = j.run_id; startPolling(); }
   loadModelInfo();
+  loadManual();
 });

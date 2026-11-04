@@ -253,6 +253,30 @@ def run_candidates(run_id: int, min_score: float = 0.0):
     return compact_candidates(run_id, min_score)
 
 
+@app.get("/api/runs/{run_id}/complexes")
+def run_complexes(run_id: int):
+    from .results import complexes_geojson
+    return complexes_geojson(run_id)
+
+
+@app.post("/api/labels/manual")
+def manual_label(payload: dict = Body(...)):
+    """A label placed directly on the map (e.g. an abandoned object the search missed)."""
+    lat, lon, label = float(payload["lat"]), float(payload["lon"]), payload.get("label")
+    if label not in (0, 1):
+        raise HTTPException(400, "label must be 0 or 1")
+    cur = db.write(db.app_con(), "INSERT INTO labels(lat, lon, label, note, run_id, candidate_id, features, ts) "
+                                 "VALUES(?,?,?,?,?,?,?,?)",
+                   (lat, lon, int(label), payload.get("note") or "отмечено на карте", None, None, None, time.time()))
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@app.delete("/api/labels/{label_id}")
+def delete_label(label_id: int):
+    db.write(db.app_con(), "DELETE FROM labels WHERE id=?", (label_id,))
+    return {"ok": True}
+
+
 @app.get("/api/candidates/{cid}")
 def candidate_detail(cid: int):
     from .results import candidate_detail as cd

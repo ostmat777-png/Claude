@@ -5,46 +5,61 @@ import math
 
 from . import osm
 
+# Version of the evidence model; meta-weights learned for another version are ignored.
+SCORING_VERSION = 3
+
+# Precision first (user feedback): context alone (forest, remote, outside settlements…) must never make an
+# object "abandoned". High scores need DIRECT evidence: OSM lifecycle tag, damaged/vanished roof, standing out
+# from neighbouring buildings, history of the place, VLM.
 DEFAULT_WEIGHTS = {
-    "bias": -3.0,
+    "bias": -3.5,
+    # direct evidence
     "osm_lifecycle": 3.0,
-    "military_ctx": 0.6,
-    "military_disused": 1.5,
-    "outside": 1.0,
-    "dacha": 0.2,
-    "settlement": -0.5,
-    "farm": 0.6,
-    "industrial": 0.3,
-    "unmapped": 0.3,
-    "far_from_roads": 0.3,
-    "minor_access": 0.3,
-    "dead_end": 0.3,
-    "road_abandoned": 0.6,
-    "isolated": 0.8,
-    "active_neighbours": -0.8,
-    "forest": 0.85,
-    "overgrowth": 0.35,
-    "tree_on_roof": 0.7,
-    "bprob_low": 0.3,
-    "clearing": 0.5,
-    "no_paths": 0.15,
-    "road_overgrown": 0.7,
-    "image_detected": 0.3,
-    "clfA": 0.8,
+    "military_disused": 1.0,
+    "clfA": 0.6,
+    "clfB": 0.5,
     "zs": 0.3,
-    "zs_cars": -0.8,
-    "clfB": 0.45,
-    "wb_veg": 0.6,
-    "wb_roof": 0.8,
-    "wb_change": 0.4,
-    "vlm": 0.7,
-    "kind_deadend": -0.6,
-    "kind_clearing": -1.0,
+    "tree_on_roof": 0.8,
+    "overgrowth": 0.3,
+    "bprob_low": 0.4,
+    "wb_veg": 0.8,
+    "wb_roof": 1.2,
+    "wb_change": 0.3,
+    "vlm": 1.2,
+    # weak context (capped together, see GROUPS["context"])
+    "military_ctx": 0.3,
+    "outside": 0.5,
+    "farm": 0.3,
+    "industrial": 0.1,
+    "unmapped": 0.15,
+    "far_from_roads": 0.2,
+    "minor_access": 0.2,
+    "dead_end": 0.2,
+    "road_abandoned": 0.4,
+    "isolated": 0.3,
+    "forest": 0.3,
+    "clearing": 0.3,
+    "no_paths": 0.1,
+    "road_overgrown": 0.4,
+    "image_detected": 0.2,
+    # active / ordinary places
+    "dacha": 0.0,
+    "settlement": -0.5,
+    "dense": -0.8,
+    "active_neighbours": -0.8,
+    "garages": -1.5,
+    "park": -2.5,
+    "museum": -2.5,
+    "construction": -2.0,
+    "protected": -1.5,
+    "monument": -2.0,
+    "cemetery": -1.5,
+    "zs_cars": -1.0,
     "zs_nobuilding": -1.5,
-    "ms_unconfirmed": -1.0,
-    "tiny": -0.5,
-    "garages": -1.2,
-    "dense": -0.4,
+    "ms_unconfirmed": -1.5,
+    "tiny": -1.0,
+    "kind_deadend": -1.5,
+    "kind_clearing": -1.5,
 }
 
 DENSE_N = 12  # buildings within ~100 m: a dacha cooperative / village even if OSM does not map it as one
@@ -70,16 +85,12 @@ def _clip(x, lo, hi):
 
 
 def _relative(p, neigh):
-    """A building is suspicious if it looks more abandoned than the buildings around it.
-    When the whole neighbourhood scores high (a dacha area under trees), the classifier reacts to the
-    surroundings, not to the house: subtract most of the neighbours' typical level."""
+    """How much MORE abandoned the object looks than the buildings around it (logit difference).
+    A dacha that looks like all neighbouring dachas gets ~0, whatever the absolute classifier output."""
     v = _logit(p)
     if neigh is None:
-        return v, ""
-    base = _logit(neigh)
-    if base <= 0:
-        return v, ""
-    return v - 0.8 * base, f" (у соседей {neigh:.2f} — сравнение с окружением)"
+        return v - 1.0, " (соседей для сравнения нет — вес снижен)"
+    return v - _logit(neigh), f" (соседи {neigh:.2f})"
 
 
 def neighbour_context(cands, radius_m=250.0, min_n=6):
@@ -102,6 +113,18 @@ def neighbour_context(cands, radius_m=250.0, min_n=6):
         vals = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for (x2, y2, p) in grid.get((gx + dx, gy + dy), ())
                 if 0 < (x2 - x) ** 2 + (y2 - y) ** 2 <= radius_m ** 2]
         c["f"]["pA_neigh"] = round(float(np.median(vals)), 4) if len(vals) >= min_n else None
+    # median "trees over the roof" of mapped neighbours: in green dacha areas every roof is partly under trees
+    tp = [c for c in cands if c["f"].get("tree_on") is not None and c.get("footprint") is not None]
+    grid2: dict = {}
+    for c in tp:
+        x, y = c["lon"] * k, c["lat"] * 110574.0
+        grid2.setdefault((int(x // cell), int(y // cell)), []).append((x, y, c["f"]["tree_on"]))
+    for c in tp:
+        x, y = c["lon"] * k, c["lat"] * 110574.0
+        gx, gy = int(x // cell), int(y // cell)
+        vals = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for (x2, y2, p) in grid2.get((gx + dx, gy + dy), ())
+                if 0 < (x2 - x) ** 2 + (y2 - y) ** 2 <= radius_m ** 2]
+        c["f"]["tree_on_neigh"] = round(float(np.median(vals)), 3) if len(vals) >= min_n else None
 
 
 def feature_vector(c) -> dict:
@@ -125,8 +148,8 @@ def feature_vector(c) -> dict:
     dense = dense_cluster(f) and c["kind"] not in ("deadend", "clearing")
     if f.get("outside_settlement") and not dense:
         x["outside"] = (1.0, "Вне населённых пунктов и садоводств")
-    elif f.get("in_dacha"):
-        x["dacha"] = (1.0, "В садоводстве (дачи)")
+    elif f.get("in_dacha") and not dense:
+        x["dense"] = (0.6, "В садоводстве (дачи) — участки обычно используются")
     if dense and not f.get("in_settlement"):
         x["dense"] = (1.0, "Плотная застройка вокруг (похоже на садоводство/посёлок, даже если его нет в OSM)")
     if t.get("building") in ("garage", "garages", "carport") or t.get("amenity") == "parking" \
@@ -134,6 +157,19 @@ def feature_vector(c) -> dict:
         x["garages"] = (1.0, "Гаражи — обычно используются, выглядят «заброшенно» из-за ржавых крыш")
     if f.get("in_settlement"):
         x["settlement"] = (1.0, "В населённом пункте" + (f" ({f['near_place_name']})" if f.get("near_place_name") else ""))
+    if f.get("in_park"):
+        x["park"] = (1.0, "Внутри парка/сквера (OSM leisure) — действующая территория")
+    if f.get("in_museum"):
+        x["museum"] = (1.0, "Музей/достопримечательность (OSM tourism) — действующая территория")
+    if f.get("in_protected"):
+        x["protected"] = (1.0, "Охраняемая природная территория/заповедник")
+    if (f.get("in_construction") or osm.is_construction(t)) and lc < 2.2:
+        x["construction"] = (1.0, "Стройплощадка (OSM) — территория используется")
+    if f.get("in_cemetery"):
+        x["cemetery"] = (1.0, "Кладбище")
+    hist = t.get("historic")
+    if hist and hist not in ("ruins", "fort", "bunker", "military") and lc < 2.2:
+        x["monument"] = (1.0, f"Памятник/исторический объект (historic={hist}) — обычно ухоженный")
     if c["kind"] == "farm":
         x["farm"] = (1.0, "Сельхоз-постройка / ферма")
     if c["kind"] == "industrial" or f.get("in_industrial"):
@@ -162,10 +198,16 @@ def feature_vector(c) -> dict:
         v = _clip(f["veg_rel"], -2, 3)
         x["overgrowth"] = (v, ("Участок заметно заросший относительно соседей" if v > 0 else
                                "Участок ухоженнее соседей") + f" (z={v:+.1f})")
-    if f.get("tree_on") is not None and f["tree_on"] >= 0.15 and c.get("footprint") is not None \
-            and c["kind"] not in ("deadend", "clearing"):
-        x["tree_on_roof"] = (_clip((f["tree_on"] - 0.15) / 0.5, 0, 1),
-                             f"Растительность поверх контура здания ({f['tree_on'] * 100:.0f}%) — крыша разрушена/заросла")
+    if f.get("tree_on") is not None and c.get("footprint") is not None and c["kind"] not in ("deadend", "clearing"):
+        # only if the roof is still partly visible (otherwise it is just a building under a tree crown)
+        # and clearly greener than the neighbours' roofs
+        base = f.get("tree_on_neigh") or 0.0
+        excess = f["tree_on"] - max(base, 0.15)
+        roof_visible = f.get("bprob") is None or f["bprob"] >= 0.3
+        if excess >= 0.25 and roof_visible:
+            x["tree_on_roof"] = (_clip(excess / 0.5, 0, 1),
+                                 f"Растительность поверх крыши {f['tree_on'] * 100:.0f}% (у соседей ~{base * 100:.0f}%) — "
+                                 "крыша разрушена или заросла")
     if f.get("veg_yard") is not None and f["veg_yard"] >= 0.85 and c.get("footprint") is not None \
             and not f.get("in_settlement") and c["kind"] not in ("deadend", "clearing"):
         x["no_paths"] = (_clip((f["veg_yard"] - 0.85) / 0.12, 0.2, 1),
@@ -176,7 +218,8 @@ def feature_vector(c) -> dict:
         v = max(_clip((f["road_tree"] - 0.6) / 0.3, 0, 1), _clip((f.get("road_veg", 0) - 0.92) / 0.08, 0, 1), 0.3)
         x["road_overgrown"] = (v, f"Подъездная дорога ({f.get('access_road')}) заросла на снимке: деревья "
                                   f"{f['road_tree'] * 100:.0f}%, зелень {f.get('road_veg', 0) * 100:.0f}%")
-    if f.get("bprob") is not None and c.get("footprint") is not None and f.get("detector_ok"):
+    if f.get("bprob") is not None and c.get("footprint") is not None and f.get("detector_ok") \
+            and (lc > 0 or (f.get("tree_on") or 0) < 0.5):  # roof hidden by a crown is not "damaged"
         b = f["bprob"]
         if b < 0.35:
             x["bprob_low"] = (_clip((0.35 - b) / 0.35, 0, 1), f"На снимке крыша почти не читается (детектор {b:.2f})")
@@ -251,11 +294,12 @@ def _ptags(c):
 # Correlated evidence (several detectors that all react to "lots of trees", several image models)
 # must not be summed as if independent: each group's total contribution is capped.
 GROUPS = {
-    "image_models": (("clfA", "clfB", "zs", "vlm"), 3.0),
-    "vegetation": (("forest", "overgrowth", "tree_on_roof", "bprob_low", "no_paths"), 1.8),
-    "remoteness": (("outside", "far_from_roads", "minor_access", "dead_end", "isolated", "road_abandoned",
-                    "road_overgrown"), 1.8),
-    "history": (("wb_veg", "wb_roof", "wb_change"), 2.0),
+    "image_models": (("clfA", "clfB", "zs"), 2.0),
+    "context": (("outside", "far_from_roads", "minor_access", "dead_end", "isolated", "road_abandoned",
+                 "road_overgrown", "forest", "clearing", "no_paths", "unmapped", "image_detected", "farm",
+                 "industrial", "military_ctx"), 0.9),
+    "vegetation": (("overgrowth", "tree_on_roof", "bprob_low"), 1.2),
+    "history": (("wb_veg", "wb_roof", "wb_change"), 1.8),
 }
 
 
@@ -423,12 +467,56 @@ def confirmation(c) -> tuple[int, list, list]:
         neg.append("не выделяется среди соседних построек")
     if not present and lc == 0 and c["kind"] not in ("deadend", "clearing"):
         neg.append("саму постройку на снимке не видно (под деревьями?) — подтвердить по снимку нельзя")
+    for k, txt in (("in_park", "парк/сквер — действующая территория"), ("in_museum", "музей/достопримечательность"),
+                   ("in_protected", "охраняемая природная территория"), ("in_construction", "стройплощадка")):
+        if f.get(k):
+            neg.append(txt)
+    if t.get("historic") and t.get("historic") not in ("ruins", "fort", "bunker", "military") and lc < 2.2:
+        neg.append(f"памятник (historic={t.get('historic')})")
+    if dense_cluster(f) and lc == 0 and not (pa is not None and neigh is not None and pa - neigh >= 0.25):
+        neg.append("обычный дом в плотной застройке (дачи/посёлок), не выделяется среди соседей")
     return len(pos), pos, neg
+
+
+def strong_evidence(c) -> bool:
+    """Both trained classifiers agree and the object stands out, the roof vanished between imagery years, or the VLM
+    is confident."""
+    f = c["f"]
+    pa = f.get("pA") if f.get("pA_trained") else None
+    pb = f.get("pB") if f.get("pB_trained") else None
+    neigh = f.get("pA_neigh")
+    if pa is not None and pb is not None and pa >= 0.7 and pb >= 0.7 and (neigh is None or pa - neigh >= 0.15):
+        return True
+    if (f.get("wb_bprob_drop") or 0) >= 0.3 and (f.get("wb_bprob_old") or 0) >= 0.6:
+        return True
+    vlm = f.get("vlm") if isinstance(f.get("vlm"), dict) else {}
+    return (vlm.get("abandoned_probability") or 0) >= 0.6 and not vlm.get("signs_of_use")
+
+
+def reliable(c) -> bool:
+    """Shown by default ('мало, но верно'): good score AND (two independent sources, or an OSM lifecycle tag on a
+    real building) AND nothing contradicts."""
+    f, t = c["f"], c["tags"]
+    if c.get("score", 0) < 0.5 or f.get("contra"):
+        return False
+    lc = osm.lifecycle_strength(t)[0]
+    if (f.get("confirm_n") or 0) >= 2 and lc < 2.2:
+        # no OSM tag: dachas and dense settlements are never shown by default, and at least one STRONG signal is
+        # required ("overgrown" + "SigLIP" alone also fit a working forest base or an unkempt garden)
+        if f.get("in_dacha") or dense_cluster(f) or f.get("in_garages"):
+            return False
+        return strong_evidence(c)
+    if (f.get("confirm_n") or 0) >= 2:
+        return True
+    return lc >= 2.2 and c["kind"] not in ("deadend", "clearing", "area") and \
+        (c.get("footprint") is not None or t.get("historic") == "ruins" or t.get("ruins") or t.get("building"))
 
 
 def apply(cands, weights=None):
     neighbour_context(cands)
     for c in cands:
+        if c["kind"] == "complex":
+            continue  # complexes are re-built from their members (complexes.build_complexes)
         c["score"], c["reasons"] = score(c, weights)
         n, pos, neg = confirmation(c)
         c["f"]["confirm_n"] = n if not neg else max(0, n - len(neg))
@@ -437,4 +525,5 @@ def apply(cands, weights=None):
         if n >= 2 and not neg:
             # independent agreement is stronger than the (capped) sum suggests
             c["score"] = max(c["score"], min(0.97, c["score"] + 0.1 * (n - 1)))
+        c["f"]["reliable"] = reliable(c)
         c["guard"], c["guard_reasons"] = guard_status(c)

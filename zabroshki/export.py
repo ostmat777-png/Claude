@@ -18,6 +18,7 @@ TYPE_RU = {
     "house": "Дом / дача", "industrial": "Промздание", "farm": "Ферма / с/х", "ruins": "Руины",
     "military": "Военный объект", "building": "Постройка", "unmapped": "Постройка по снимку",
     "clearing": "Прогалина в лесу", "deadend": "Тупик дороги", "area": "Территория",
+    "complex": "Территория / комплекс",
 }
 
 
@@ -28,6 +29,8 @@ def _rows(run_id, filters):
     min_score = float(filters.get("min_score") or 0)
     only_unl = bool(filters.get("only_unlabeled"))
     only_conf = bool(filters.get("only_confirmed"))
+    only_rel = bool(filters.get("only_reliable"))
+    show_parts = bool(filters.get("show_parts"))
     grid = label_index()
     out = []
     for r in rows:
@@ -38,7 +41,12 @@ def _rows(run_id, filters):
         lb = find_label(grid, r["lat"], r["lon"]) if grid else None
         if only_unl and lb is not None:
             continue
-        if only_conf and (db.loads(r["features"], {}).get("confirm_n") or 0) < 2:
+        ff = db.loads(r["features"], {})
+        if only_conf and (ff.get("confirm_n") or 0) < 2:
+            continue
+        if only_rel and not ff.get("reliable"):
+            continue
+        if not show_parts and ff.get("complex_key"):
             continue
         out.append((r, lb["label"] if lb else None))
     return out

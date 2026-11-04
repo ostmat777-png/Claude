@@ -121,6 +121,9 @@ def proxy_eval(cands, weights):
 
 def positives_eval(cands, run_poly):
     pos = read_positives()
+    # objects the user marked on the map as abandoned (e.g. ones the search missed) are examples too
+    for r in db.app_con().execute("SELECT lat, lon, note FROM labels WHERE label=1 AND candidate_id IS NULL"):
+        pos.append({"lat": r["lat"], "lon": r["lon"], "comment": r["note"] or "отметка на карте"})
     if not pos:
         return None, []
     order = sorted(range(len(cands)), key=lambda i: -cands[i]["score"])
@@ -136,6 +139,13 @@ def positives_eval(cands, run_poly):
             # prefer the best scored candidate within the radius
             if d <= MATCH_M and (best is None or c["score"] > cands[best]["score"]):
                 best, bd = i, d
+        if best is None:  # inside the outline of a found territory/building counts as found
+            pt = Point(p["lon"], p["lat"])
+            for i, c in enumerate(cands):
+                fp = c.get("footprint")
+                if fp is not None and abs(c["lat"] - p["lat"]) < 0.01 and fp.buffer(0.0002).contains(pt):
+                    if best is None or c["score"] > cands[best]["score"]:
+                        best, bd = i, 0.0
         rows.append((p, inside, best, bd))
     inside_rows = [r for r in rows if r[1]]
     n = len(inside_rows)

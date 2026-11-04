@@ -247,6 +247,7 @@ def run_search(job, run_id: int):
         if n_abs:
             job.info(f"Объединено мелких точек с соседними зданиями: {n_abs} (одна метка на объект)")
         _rescore(cands, weights)
+        _add_complexes(cands, lp, job)
         keep = opts.get("min_score_keep", 0.03)
         stats["candidates"] = len(cands)
         stats["above_keep"] = sum(1 for c in cands if c["score"] >= keep)
@@ -254,9 +255,10 @@ def run_search(job, run_id: int):
         stats["green"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "green")
         stats["yellow"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "yellow")
         stats["confirmed"] = sum(1 for c in cands if c["score"] >= keep and (c["f"].get("confirm_n") or 0) >= 2)
+        stats["reliable"] = sum(1 for c in cands if c["f"].get("reliable") and not c["f"].get("complex_key"))
         save_candidates(run_id, cands, status="done", stats=stats)
         job.info(f"Итого кандидатов: {stats['above_keep']} (красных {stats['red']}, жёлтых {stats['yellow']}, "
-                 f"зелёных {stats['green']}); подтверждено ≥2 источниками: {stats['confirmed']}")
+                 f"зелёных {stats['green']}); надёжных объектов (показываются по умолчанию): {stats['reliable']}")
         return stats
     except Exception as e:
         from .jobs import Cancelled
@@ -270,6 +272,15 @@ def run_search(job, run_id: int):
         except Exception:
             log.exception("save on error failed")
         raise
+
+
+def _add_complexes(cands, lp, job=None):
+    from .complexes import build_complexes
+    start = max((c.get("idx", 0) for c in cands), default=0) + 1
+    cx = build_complexes(cands, lp, start)
+    cands.extend(cx)
+    if job and cx:
+        job.info(f"Территорий (комплексов) выделено: {len(cx)} — одна метка и контур на весь объект")
 
 
 def run_retrain(job, run_id=None):
@@ -289,10 +300,14 @@ def run_retrain(job, run_id=None):
         row = db.app_con().execute("SELECT geojson FROM runs WHERE id=?", (rid,)).fetchone()
         try:
             cen = area_from_geojson(db.loads(row["geojson"])).centroid
+            lpx = LocalProj(cen.y, cen.x)
+            cs[:] = [c for c in cs if c["kind"] != "complex"]
             _rescore(cs, weights)
-            C.absorb_satellites(cs, LocalProj(cen.y, cen.x))
+            C.absorb_satellites(cs, lpx)
+            _rescore(cs, weights)
+            _add_complexes(cs, lpx, job)
         except Exception:
-            log.exception("absorb_satellites")
-        _rescore(cs, weights)
+            log.exception("absorb_satellites / complexes")
+            _rescore(cs, weights)
         save_candidates(rid, cs)
     return {"runs": list(all_c), "candidates": len(pool)}

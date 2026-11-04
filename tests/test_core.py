@@ -193,3 +193,70 @@ def test_info_parsers():
     assert cats == ["condition", "security"] and "сторож" in notes[1]["text"]
     links = info.links(60.71, 28.73, {"name": "Форт"}, "ruins")
     assert any("urban3p" in l["url"] for l in links) and all(l["url"].startswith("https://") for l in links)
+
+
+def test_construction_site_is_not_abandoned():
+    t = {"landuse": "brownfield", "name": "Строительство ЖК \"Ратуша\""}
+    assert osm.is_construction(t) and not osm.is_lifecycle(t)
+    assert osm.lifecycle_strength(t)[0] == 0
+    t2 = {"landuse": "brownfield", "name": "Бывший завод"}
+    assert not osm.is_construction(t2) and osm.is_lifecycle(t2)
+    assert not osm.is_construction({"highway": "construction", "construction": "residential"})
+    assert not osm.is_construction({"building": "school", "name": "Лицей (Строительное отделение)"})
+
+
+def test_building_like_filters_fences_and_monuments():
+    lp = LocalProj(60.7, 28.7)
+    poly = box(28.7000, 60.7000, 28.7004, 60.7002)
+    tiny = box(28.70000, 60.70000, 28.70002, 60.70001)
+    assert C.building_like({"building": "ruins"}, poly, lp)
+    assert not C.building_like({"building": "ruins"}, tiny, lp)
+    assert not C.building_like({"barrier": "fence", "abandoned": "yes"}, LineString([(28.7, 60.7), (28.701, 60.7)]), lp)
+    assert not C.building_like({"historic": "memorial", "disused": "yes"}, poly.centroid, lp)
+
+
+def test_complex_from_cluster_and_reliability():
+    from zabroshki.complexes import build_complexes
+    lp = LocalProj(60.7, 28.7)
+    a = C.new_candidate("osm:way/1", 60.70005, 28.70010, "industrial",
+                        footprint=box(28.70000, 60.70000, 28.70020, 60.70010), sources=["OSM"])
+    b = C.new_candidate("osm:way/2", 60.70025, 28.70010, "industrial",
+                        footprint=box(28.70000, 60.70020, 28.70020, 60.70030), sources=["OSM"])
+    far = C.new_candidate("osm:way/3", 60.7100, 28.7100, "house",
+                          footprint=box(28.70995, 60.70995, 28.71005, 60.71005), sources=["OSM"])
+    for i, (c, sc) in enumerate(((a, 0.7), (b, 0.6), (far, 0.9))):
+        c.update({"score": sc, "idx": i, "guard": "yellow", "reasons": [], "guard_reasons": []})
+    cands = [a, b, far]
+    out = build_complexes(cands, lp, 10)
+    assert len(out) == 1 and out[0]["f"]["n_members"] == 2
+    assert not out[0]["f"]["reliable"]                      # no reliable member -> hidden by default
+    assert a["f"]["complex_key"] == out[0]["key"] and "complex_key" not in far["f"]
+    a["f"]["reliable"] = True
+    out = build_complexes(cands, lp, 10)
+    assert out[0]["f"]["reliable"] and out[0]["footprint"].contains(out[0]["footprint"].representative_point())
+
+
+def test_lifecycle_scope_whole_building_only():
+    # a closed shop / cafe inside a working house is not an abandoned building
+    assert osm.lifecycle_strength({"building": "yes", "disused:shop": "car_parts"})[0] == 0
+    assert not osm.is_lifecycle({"disused:shop": "greengrocer", "demolished:building": "retail"})
+    assert not osm.is_lifecycle({"was:building": "yes"})                        # the object is gone
+    assert not osm.is_lifecycle({"abandoned": "yes", "amenity": "fountain"})
+    assert not osm.is_lifecycle({"abandoned": "yes", "abandoned:railway": "halt"})
+    # whole buildings / sites still count
+    assert osm.lifecycle_strength({"disused:amenity": "school", "building": "school"})[0] >= 2.2
+    assert osm.lifecycle_strength({"abandoned": "yes", "building": "yes"})[0] >= 3.0
+    assert osm.lifecycle_strength({"abandoned:building": "industrial"})[0] >= 3.0
+    assert osm.lifecycle_strength({"building": "ruins"})[0] >= 3.0
+    assert osm.lifecycle_strength({"abandoned": "yes"})[0] >= 3.0                 # nothing else tagged: the object itself
+
+
+def test_reliable_needs_strong_signal_without_osm_tag():
+    c = _cand(outside_settlement=True)
+    c.update({"score": 0.8, "tags": {"building": "yes"}, "kind": "building"})
+    c["f"].update({"confirm_n": 2, "contra": []})
+    assert not scoring.reliable(c)                          # e.g. "overgrown" + "SigLIP" only
+    c["f"].update({"wb_bprob_drop": 0.4, "wb_bprob_old": 0.8})
+    assert scoring.reliable(c)                              # the roof vanished between imagery years
+    c["f"]["in_dacha"] = True
+    assert not scoring.reliable(c)                          # dachas need an OSM tag

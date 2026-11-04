@@ -101,7 +101,7 @@ class Context:
         f["landuse"] = sorted(lu)
         for cls in ("residential", "allotments", "industrial", "commercial", "retail", "farmyard", "garages",
                     "military", "brownfield", "quarry", "construction", "railway", "cemetery", "landfill",
-                    "place_area"):
+                    "place_area", "park", "protected", "museum"):
             f["in_" + cls] = cls in lu
         f["industrial_disused"] = bool(lu.get("industrial") and osm.is_lifecycle(lu["industrial"]))
         st = self.settlement(pt)
@@ -184,6 +184,32 @@ def _type_context(f):
             "in_residential": f.get("in_settlement")}
 
 
+BUILDINGISH_KEYS = ("building", "abandoned:building", "disused:building", "ruins:building",
+                    "abandoned:amenity", "disused:amenity", "abandoned:military", "disused:military",
+                    "abandoned:man_made", "disused:man_made", "abandoned:industrial", "disused:industrial")
+
+
+def building_like(tags, g, lp) -> bool:
+    """Lifecycle objects worth a marker: buildings, ruins, bunkers, towers, territories >= 300 m².
+    Not: fences, gates, benches, monuments, roads/railways, tiny polygons."""
+    if any(k in tags for k in ("barrier", "highway", "railway", "power", "waterway")) and "building" not in tags:
+        return False
+    if not osm.is_lifecycle(tags) and "military" not in tags and tags.get("landuse") != "military":
+        return False   # e.g. only a closed shop / removed object: no abandoned building here
+    if tags.get("historic") and tags.get("historic") not in ("ruins", "fort", "bunker", "military") \
+            and not tags.get("building"):
+        return False
+    if any(k in tags for k in BUILDINGISH_KEYS) or tags.get("historic") in ("ruins", "fort", "bunker") \
+            or tags.get("ruins") or tags.get("military") in ("bunker", "barracks", "checkpoint", "office") \
+            or tags.get("man_made") in ("water_tower", "tower", "chimney", "works", "silo", "bunker_silo"):
+        if g.geom_type in ("Polygon", "MultiPolygon"):
+            return lp.geom_to_m(g).area >= 15
+        return True
+    if g.geom_type in ("Polygon", "MultiPolygon"):
+        return lp.geom_to_m(g).area >= 300   # brownfield / military territory etc.
+    return False
+
+
 def assemble(d: osm.OsmData, footprints_ll, lp: LocalProj, area_poly_ll, job=None):
     """Build candidate list (dicts) from OSM + MS footprints. Imagery detections are added later."""
     area_prep = prep(area_poly_ll.buffer(0.0003))
@@ -222,11 +248,12 @@ def assemble(d: osm.OsmData, footprints_ll, lp: LocalProj, area_poly_ll, job=Non
         merged = False
         if bld_tree is not None:
             if g.geom_type == "Point":
-                hits = bld_tree.query(cm, predicate="dwithin", distance=20)
+                hits = bld_tree.query(cm, predicate="dwithin", distance=2)
                 for i in hits:
                     tgt = cands[bld_keys[i]]
                     for kk, vv in obj["tags"].items():
-                        tgt["tags"].setdefault(kk, vv)
+                        if not kk.startswith(tuple(p + ":" for p in osm.GONE_PREFIXES)):
+                            tgt["tags"].setdefault(kk, vv)
                     tgt["osm_ids"].append(oid)
                     merged = True
                     break
@@ -243,6 +270,8 @@ def assemble(d: osm.OsmData, footprints_ll, lp: LocalProj, area_poly_ll, job=Non
                     if len(inside) > 0 and gm.area > 3000:
                         merged = True  # big area: its buildings represent it
         if merged:
+            continue
+        if not building_like(obj["tags"], g, lp):
             continue
         kind = osm.tags_type(obj["tags"])
         fp = g if g.geom_type in ("Polygon", "MultiPolygon") else None
@@ -475,7 +504,7 @@ def _is_satellite(c) -> bool:
     if c["kind"] in ("deadend", "clearing"):
         return True
     if c.get("footprint") is None:
-        return True
+        return not (c["key"].startswith("osm:") and osm.lifecycle_strength(c["tags"])[0] > 0)
     ms_only = "OSM" not in c["sources"] and "MS Footprints" in c["sources"]
     if ms_only and ((f.get("bprob") or 0) < 0.3 or (f.get("area_m2") or 99) < 15):
         return True
