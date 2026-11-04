@@ -169,7 +169,7 @@ def run_search(job, run_id: int):
             n_bg = scan.prepare(fps, job)
             job.info(f"Тайлов снимка z{scan.z} в области: {len(scan.tiles)}"
                      + (f", открытая вода (пропуск): {len(scan.water)}" if scan.water else "")
-                     + f"; {n_bg} тайлов (лес, поля, обучение детектора) скачиваются в фоне, пока грузится OSM")
+                     + f"; {n_bg} из них скачиваются в фоне, пока грузится OSM")
 
         # 2. OSM
         stage(stage_names[1])
@@ -198,10 +198,13 @@ def run_search(job, run_id: int):
         if use_img:
             stage(stage_names[k])
             n_skip = scan.plan(cands)
-            if n_skip:
-                job.info(f"Быстрый режим: не сканируется {n_skip} из {len(scan.tiles)} тайлов — открытая вода и "
-                         f"дачи/плотная застройка, где надёжной метки быть не может "
-                         f"(полный скан: «Режим поиска: полный»)")
+            if n_skip and fast:
+                job.info(f"Быстрый режим: сканируется {len(scan.scan_tiles)} из {len(scan.tiles)} тайлов — только там, "
+                         f"где есть постройки, способные стать надёжной меткой (без пустого леса/полей/воды "
+                         f"и кварталов дач/плотной застройки без тегов OSM). Поиск построек, которых нет ни на одной "
+                         f"карте, и прогалин — в режиме «полный»")
+            elif n_skip:
+                job.info(f"Открытая вода без построек: не сканируется {n_skip} тайлов")
             new = scan.run(cands, ctx, fps, d)
             if new:
                 C.compute_context(new, ctx, job, failed)
@@ -235,7 +238,7 @@ def run_search(job, run_id: int):
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
             stage(stage_names[k])
-            if use_wb and fast:   # collect imagery dates for the likely Wayback set while the z18 check runs
+            if use_wb:   # collect imagery dates for the likely Wayback set while the z18 check runs
                 import threading
                 from . import wayback as _wb
                 wb_thread = threading.Thread(target=_wb.prefetch_versions,

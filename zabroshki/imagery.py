@@ -193,16 +193,19 @@ class Scanner:
 
     # -------------------------------------------------------------- plan (fast mode) + background download
     def prepare(self, fps, job=None):
-        """Before OSM: open-water overview, the detector training sample and background download of the tiles that
-        are needed in any case (no known buildings: forest, fields)."""
+        """Before OSM: the detector training sample and background download of tiles that will most likely be
+        scanned. Fast mode: tiles with a few known buildings (dense blocks are decided after OSM). Full mode: all
+        tiles except open water (judged on a cheap overview)."""
         fast = self.opts.get("search_mode", "fast") == "fast"
         fp_tree = STRtree(list(fps)) if fps else None
-
-        def has_b(t):
+        n_fp = {}
+        for t in self.tiles:
             w, s, e, n = tile_bounds(t[0], t[1], self.z)
-            return fp_tree is not None and len(fp_tree.query(box(w, s, e, n))) > 0
-        with_b = {t for t in self.tiles if has_b(t)}
-        if fast:
+            k = len(fp_tree.query(box(w, s, e, n))) if fp_tree is not None else 0
+            if k:
+                n_fp[t] = k
+        with_b = set(n_fp)
+        if not fast:
             try:
                 self.water = {t for t in open_water_tiles(self.provider, self.z, self.tiles, job) if t not in with_b}
             except Exception as e:
@@ -221,23 +224,31 @@ class Scanner:
         self.feeder = TileFeeder(self.provider, self.z, checkpoint=self.job.checkpoint)
         if self.opts.get("use_models"):
             self.feeder.add(sample)
-        self.feeder.add([t for t in self.tiles if t not in with_b and t not in self.water])
+        if fast:
+            self.feeder.add([t for t in self.tiles if 1 <= n_fp.get(t, 0) <= 6])
+        else:
+            self.feeder.add([t for t in self.tiles if t not in self.water])
         self.stats["water_tiles_skipped"] = len(self.water)
         return len(self.feeder.order)
 
     def plan(self, cands):
-        """After OSM: in the fast mode skip tiles where no candidate can ever become a reliable mark (dachas, dense
-        settlements, garages, parks … without OSM lifecycle tags) and open water without buildings."""
+        """After OSM. Fast mode: scan only tiles with at least one candidate that can still become a reliable mark.
+        Measured on Vyborg: of 3 578 buildings found only on imagery (not in OSM, not in Microsoft footprints) none
+        reached even 0.5, every reliable mark is a mapped building, so empty forest/field tiles, open water and
+        blocks of dachas/dense houses without OSM tags give nothing in this mode. Full mode: everything except open
+        water without buildings."""
         from .scoring import never_reliable
-        skip = set(self.water)
+        by_tile: dict = {}
+        for c in cands:
+            px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
+            by_tile.setdefault((int(px // TILE), int(py // TILE)), []).append(c)
         if self.opts.get("search_mode", "fast") == "fast":
-            by_tile: dict = {}
-            for c in cands:
-                px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
-                by_tile.setdefault((int(px // TILE), int(py // TILE)), []).append(c)
-            dense = {t for t, cl in by_tile.items() if all(never_reliable(c) for c in cl)}
-            skip = (skip - set(by_tile)) | dense
-            self.stats["dense_tiles_skipped"] = len(dense & set(self.tiles))
+            need = {t for t, cl in by_tile.items() if not all(never_reliable(c) for c in cl)}
+            skip = set(self.tiles) - need
+            self.stats["dense_tiles_skipped"] = sum(1 for t, cl in by_tile.items() if t not in need)
+            self.stats["empty_tiles_skipped"] = sum(1 for t in self.tiles if t not in by_tile)
+        else:
+            skip = set(self.water) - set(by_tile)
         self.skipped = skip & set(self.tiles)
         self.scan_tiles = [t for t in self.tiles if t not in self.skipped]
         self.stats["scan_tiles"] = len(self.scan_tiles)
@@ -640,8 +651,10 @@ class Scanner:
         H, W = self.tree_g.shape
         if 0 <= rr < H and 0 <= cc < W:
             rad = max(1, int(100 / (TILE / self.G * self.mpp)))
-            win = self.tree_g[max(0, rr - rad):rr + rad + 1, max(0, cc - rad):cc + rad + 1]
-            f["forest_100m"] = round(float(win.mean() / 255), 3)
+            sl = (slice(max(0, rr - rad), rr + rad + 1), slice(max(0, cc - rad), cc + rad + 1))
+            vm = self.valid_g[sl]   # only scanned cells (neighbouring tiles may be skipped in the fast mode)
+            if vm.any():
+                f["forest_100m"] = round(float(self.tree_g[sl][vm].mean() / 255), 3)
             if self.detector is not None:
                 f["detector_ok"] = True
                 # max detector probability over the footprint cells
