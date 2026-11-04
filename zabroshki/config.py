@@ -68,7 +68,7 @@ DEFAULTS: dict = {
     "min_score_keep": 0.05,   # recall first: almost everything is kept
     "merge_radius_m": 18,
     # --- models -------------------------------------------------------------
-    "device": "auto",          # auto | cuda | cpu
+    "device": "auto",          # auto | cuda (NVIDIA/ROCm) | directml (AMD/Intel on Windows) | xpu | mps | cpu
     "dino_model": "facebook/dinov2-small",
     "dino_input": "auto",      # auto -> 448 on GPU, 224 on CPU
     "siglip_model": "google/siglip-base-patch16-224",

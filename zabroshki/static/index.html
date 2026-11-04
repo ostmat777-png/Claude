@@ -120,6 +120,15 @@
         <label>Точная проверка, топ-K: <input type="number" id="optTopK" min="0" step="50" value="1500"></label>
         <label>Wayback, топ-K: <input type="number" id="optWbK" min="0" step="50" value="400"></label>
         <label>Провайдер снимков: <select id="optProvider"></select></label>
+        <label title="Применяется после перезапуска программы">Вычисления:
+          <select id="optDevice">
+            <option value="auto">авто (лучшее доступное)</option>
+            <option value="cuda">видеокарта NVIDIA (CUDA) / AMD на Linux (ROCm)</option>
+            <option value="directml">видеокарта AMD / Intel / любая (DirectML, Windows)</option>
+            <option value="xpu">Intel Arc (XPU)</option>
+            <option value="mps">Apple M1–M4 (Metal)</option>
+            <option value="cpu">только процессор</option>
+          </select></label>
         <button id="btnSaveOpts">Сохранить параметры</button>
       </div>
       <p class="muted small">Снимки: Esri World Imagery / Wayback. Данные: © участники OpenStreetMap, Microsoft Building Footprints (ODbL).</p>

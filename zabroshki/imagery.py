@@ -161,7 +161,7 @@ class Scanner:
 
         # ---- full pass
         order = list(self.tiles)
-        B = 32 if (self.dino and self.dino.dev.type == "cuda") else 8
+        B = self.dino.batch if self.dino else 8
         t0 = time.time()
         snowy = 0
         for i in range(0, len(order), B):
@@ -261,7 +261,8 @@ class Scanner:
                 with_b.append(t)
             else:
                 without.append(t)
-        n_train = min(len(self.tiles), 500 if self.dino.dev.type == "cuda" else 220)
+        from .models import accelerated
+        n_train = min(len(self.tiles), 500 if accelerated() else 220)
         sample = rng.sample(with_b, min(len(with_b), int(n_train * 0.7)))
         sample += rng.sample(without, min(len(without), n_train - len(sample)))
         if len(with_b) < 5:

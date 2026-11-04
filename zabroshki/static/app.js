@@ -581,6 +581,7 @@ async function loadSettings() {
   $('#optTopK').value = s.stage_b_top_k;
   $('#optWbK').value = s.wayback_top_k;
   $('#zScan').textContent = s.scan_zoom;
+  $('#optDevice').value = s.device || 'auto';
   const p = await api('/api/providers');
   $('#optProvider').innerHTML = Object.entries(p.providers).filter(([, v]) => v.kind === 'sat')
     .map(([k, v]) => `<option value="${k}" ${k === p.imagery ? 'selected' : ''}>${esc(v.name)}</option>`).join('');
@@ -590,9 +591,12 @@ async function saveOpts() {
   const o = searchOptions();
   o.use_vlm = o.use_vlm === 'auto' ? 'auto' : o.use_vlm === 'true';
   o.imagery_provider = $('#optProvider').value;
+  const devChanged = (S.settings && S.settings.device) !== $('#optDevice').value;
+  o.device = $('#optDevice').value;
   await api('/api/settings', { method: 'POST', body: o });
-  $('#btnSaveOpts').textContent = 'Сохранено ✓';
-  setTimeout(() => { $('#btnSaveOpts').textContent = 'Сохранить параметры'; }, 1500);
+  $('#btnSaveOpts').textContent = devChanged ? 'Сохранено ✓ — перезапустите программу' : 'Сохранено ✓';
+  if (S.settings) S.settings.device = o.device;
+  setTimeout(() => { $('#btnSaveOpts').textContent = 'Сохранить параметры'; }, devChanged ? 6000 : 1500);
 }
 
 async function doExport(fmt) {

@@ -1,0 +1,5 @@
+# torch-directml (AMD/Intel GPUs on Windows) is built for torch 2.4.1;
+# newer transformers releases require torch>=2.6, so pin the last compatible one.
+torch==2.4.1
+torchvision==0.19.1
+transformers==4.49.0
