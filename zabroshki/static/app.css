@@ -122,3 +122,15 @@ h4 { margin: 10px 0 2px; }
 
 .conf { color: #00e5ff; font-size: 10px; margin-left: 3px; font-weight: 700; }
 .item { grid-template-columns: 14px 58px 1fr; }
+
+.infobox { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: #1a1e25; }
+.infobox h4 { margin: 6px 0 4px; display: flex; align-items: center; gap: 6px; }
+.infobox button.small { padding: 0 6px; font-size: 12px; }
+.autodesc { font-size: 12.5px; line-height: 1.45; margin-bottom: 6px; }
+.wcard { display: grid; grid-template-columns: 90px 1fr; gap: 8px; margin: 6px 0; }
+.wcard img { width: 90px; height: 90px; object-fit: cover; border-radius: 4px; cursor: zoom-in; }
+.wcard a, .wd a, .notes a, .years figcaption a { color: #8cc4ff; }
+.wd { margin: 4px 0; }
+.notes { padding-left: 16px; margin: 2px 0; font-size: 12.5px; }
+.notes li { margin: 3px 0; }
+.years figcaption a { font-size: 10px; }

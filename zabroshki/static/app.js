@@ -343,6 +343,7 @@ function renderDetail(d) {
       <button class="no ${d.label === 0 ? 'on' : ''}" id="lblNo">Не заброшка</button>
     </div>
     <div class="muted small" id="lblHint">${S.labelsSinceTrain ? `Новых отметок: ${S.labelsSinceTrain}. Чтобы учесть их в ранжировании — вкладка «Модель» → «Дообучить и пересчитать».` : 'Отметки сохраняются и используются для дообучения.'}</div>
+    <div id="infoBox" class="infobox"><h4>Сведения об объекте</h4><p class="muted">Загрузка из открытых источников…</p></div>
     <h4>Подтверждение: ${d.confirm_n >= 2 ? '✔ ' + d.confirm_n + ' независимых источника' : d.confirm_n === 1 ? 'один источник — нужна проверка' : 'не подтверждено'}</h4>
     <ul class="reasons">${(d.confirm || []).map((t) => `<li><span class="w pos">✔</span><span>${esc(t)}</span></li>`).join('')}${(d.contra || []).map((t) => `<li><span class="w neg">✘</span><span>${esc(t)}</span></li>`).join('')}</ul>
     <h4>Почему такой балл</h4>
@@ -368,6 +369,56 @@ function renderDetail(d) {
   $('#lblNo').onclick = () => setLabel(d.id, d.label === 0 ? null : 0);
   $('#copyLL').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(ll); };
   $$('#detail img').forEach((im) => im.addEventListener('click', () => showBig(im.src.replace(/size=\d+/, 'size=768'), im.dataset.cap)));
+  loadInfo(d.id, false);
+}
+
+async function loadInfo(id, refresh) {
+  const box = $('#infoBox');
+  if (!box) return;
+  let info;
+  try { info = await api(`/api/candidates/${id}/info${refresh ? '?refresh=1' : ''}`); } catch (e) {
+    box.innerHTML = '<h4>Сведения об объекте</h4><p class="muted">Не удалось загрузить: ' + esc(e.message) + '</p>'; return;
+  }
+  if (S.selected !== id || !$('#infoBox')) return;
+  const h = [];
+  h.push('<h4>Сведения об объекте <button id="infoRefresh" class="small" title="Загрузить заново">↻</button></h4>');
+  if (info.auto && info.auto.length) h.push(`<div class="autodesc">${info.auto.map((t) => esc(t)).join(' ')}</div>`);
+  for (const w of (info.wikipedia || [])) {
+    h.push(`<div class="wcard">${w.thumb ? `<img class="ph" src="${esc(w.thumb)}" data-full="${esc(w.thumb)}" data-cap="${esc(w.title)}">` : '<span></span>'}
+      <div><b><a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.title)}</a></b>
+      <span class="muted small">Википедия (${esc(w.lang)})${w.dist_m ? ', ~' + w.dist_m + ' м' : ''}</span>
+      <div class="small">${esc(w.extract || '')}</div></div></div>`);
+  }
+  for (const w of (info.wikidata || []).slice(0, 3)) {
+    const facts = Object.entries(w.facts || {}).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(' · ');
+    h.push(`<div class="small wd"><a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(w.label || w.qid)}</a>
+      ${w.dist_m != null ? `<span class="muted">(~${w.dist_m} м)</span>` : ''} — ${esc(w.description || '')}${facts ? '<br><span class="muted">' + facts + '</span>' : ''}</div>`);
+  }
+  if ((info.osm || []).length) {
+    h.push('<div class="kv small">' + info.osm.map((x) => `<div>${esc(x.k)}</div><div>${esc(x.v)}</div>`).join('') + '</div>');
+  }
+  const notes = info.notes || [];
+  const cond = notes.filter((n) => n.cat === 'condition');
+  const sec = notes.filter((n) => n.cat === 'security');
+  const noteHtml = (arr) => arr.map((n) => `<li><span>${esc(n.text)}</span> <span class="muted small">— ${n.url ? `<a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.source)}</a>` : esc(n.source)}</span></li>`).join('');
+  if (cond.length) h.push(`<h4>Состояние и заброшенность по источникам</h4><ul class="notes">${noteHtml(cond)}</ul>`);
+  if (sec.length) h.push(`<h4>Охрана и доступ по источникам</h4><ul class="notes">${noteHtml(sec)}</ul>`);
+  if (!cond.length && !sec.length) h.push('<p class="muted small">В открытых источниках сведений о состоянии и охране не найдено — проверьте ссылки ниже.</p>');
+  const ph = info.photos || [];
+  if (ph.length) {
+    h.push('<h4>Фотографии рядом (открытые источники)</h4><div class="years">' + ph.map((p) => `<figure>
+      <img class="ph" loading="lazy" src="${esc(p.thumb || '')}" data-full="${esc(p.full || p.thumb || '')}" data-cap="${esc((p.title || p.source) + (p.date ? ', ' + p.date : '') + (p.author ? ' · ' + p.author : '') + (p.license ? ' · ' + p.license : ''))}">
+      <figcaption>${esc(p.source)}${p.date ? ' · ' + esc(p.date) : ''}${p.dist_m != null ? ' · ' + p.dist_m + ' м' : ''}${p.looks_at ? ' · смотрит на объект' : ''}
+      <br><a href="${esc(p.url || '#')}" target="_blank" rel="noopener">${esc((p.author || 'автор') + (p.license ? ', ' + p.license : ''))}</a></figcaption></figure>`).join('') + '</div>');
+  } else {
+    h.push('<p class="muted small">Фотографий с геометкой рядом не найдено.</p>');
+  }
+  h.push('<div class="links small">' + (info.links || []).map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title)} ↗</a>`).join(' ') + '</div>');
+  if ((info.errors || []).length) h.push(`<p class="muted small">Недоступны: ${esc(info.errors.join(', '))} — попробуйте ↻ позже.</p>`);
+  h.push('<p class="muted small">Перед поездкой проверьте законность доступа: заброшенные здания опасны, территория может быть частной или охраняемой.</p>');
+  box.innerHTML = h.join('');
+  $('#infoRefresh').onclick = () => { box.querySelector('h4').insertAdjacentHTML('afterend', '<p class="muted">Обновление…</p>'); loadInfo(id, true); };
+  box.querySelectorAll('img.ph').forEach((im) => im.addEventListener('click', () => showBig(im.dataset.full || im.src, im.dataset.cap)));
 }
 
 async function setLabel(id, label) {

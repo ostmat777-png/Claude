@@ -219,6 +219,15 @@ def candidate_detail(cid: int):
     return d
 
 
+@app.get("/api/candidates/{cid}/info")
+def candidate_info(cid: int, refresh: bool = False):
+    from .info import get_info
+    d = get_info(cid, refresh)
+    if d is None:
+        raise HTTPException(404)
+    return d
+
+
 @app.get("/api/candidates/{cid}/image")
 def candidate_image(cid: int, src: str = "current", zoom: int | None = None, size: int = 320):
     from .results import candidate_image as ci

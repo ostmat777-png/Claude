@@ -162,3 +162,34 @@ def test_dense_cluster_dacha_not_outside():
     c = _cand(outside_settlement=True, footprints_100m=30, tree_ring=0.8)
     xv = scoring.feature_vector(c)
     assert "outside" not in xv and "dense" in xv
+
+
+def test_info_parsers():
+    from zabroshki import info
+    wd = {"results": {"bindings": [
+        {"item": {"value": "http://www.wikidata.org/entity/Q1"}, "itemLabel": {"value": "Руины церкви"},
+         "loc": {"value": "Point(28.7331 60.7106)"}, "inception": {"value": "1481-01-01T00:00:00Z"},
+         "stateLabel": {"value": "руины"}, "image": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/A.jpg"},
+         "ru": {"value": "https://ru.wikipedia.org/wiki/%D0%A0%D1%83%D0%B8%D0%BD%D1%8B"}}]}}
+    items = info.parse_wikidata(wd, 60.7106, 28.7331)
+    assert items[0]["facts"]["Основано/построено"] == "1481" and items[0]["facts"]["Состояние"] == "руины"
+    assert items[0]["image_thumb"].startswith("https://") and "width=" in items[0]["image_thumb"]
+    assert info.wiki_title_from_url(items[0]["wiki"]["ru"]) == ("ru", "Руины")
+    cm = {"query": {"pages": [{"title": "File:X.jpg", "coordinates": [{"lat": 60.7107, "lon": 28.7331}],
+                               "imageinfo": [{"thumburl": "t", "descriptionurl": "d", "url": "u",
+                                              "extmetadata": {"Artist": {"value": "<a>Ivan</a>"},
+                                                              "LicenseShortName": {"value": "CC BY-SA 4.0"}}}]}]}}
+    ph = info.parse_commons(cm, 60.7106, 28.7331)
+    assert ph[0]["author"] == "Ivan" and ph[0]["license"] == "CC BY-SA 4.0" and ph[0]["dist_m"] < 20
+    pm = {"features": [{"id": "a", "geometry": {"coordinates": [28.7331, 60.7101]},
+                        "properties": {"view:azimuth": 0, "license": "CC-BY-SA-4.0", "datetime": "2023-06-27T17:13"},
+                        "assets": {"sd": {"href": "s"}, "hd": {"href": "h"}}}]}
+    pp = info.parse_panoramax(pm, 60.7106, 28.7331)
+    assert pp[0]["looks_at"] is True and pp[0]["license"] == "CC-BY-SA-4.0"
+    notes = info.notes_from_text("Церковь разрушена пожаром в 1944 году. Здание является объектом культурного "
+                                 "наследия и находится под охраной государства. Территория огорожена забором, "
+                                 "есть сторож.", "src", "u")
+    cats = [n["cat"] for n in notes]
+    assert cats == ["condition", "security"] and "сторож" in notes[1]["text"]
+    links = info.links(60.71, 28.73, {"name": "Форт"}, "ruins")
+    assert any("urban3p" in l["url"] for l in links) and all(l["url"].startswith("https://") for l in links)
