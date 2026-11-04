@@ -155,12 +155,22 @@ def fetch_area(poly, job=None) -> list:
             plan.append((name, body, ch, out))
     els_by_id = {}
     failed = []
-    for i, (name, body, ch, out) in enumerate(plan):
-        if job:
-            job.progress(i, len(plan), f"OSM: {name} ({i + 1}/{len(plan)})")
-        got = _fetch_split(body, ch, out, job, depth=0, failed=failed, name=name)
-        for el in got:
-            els_by_id[(el["type"], el["id"])] = el
+    par = max(1, int(settings().get("overpass_parallel", 2)))
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    done = 0
+    with ThreadPoolExecutor(max_workers=par) as ex:   # public servers allow ~2 simultaneous requests per IP
+        futs = [ex.submit(_fetch_split, body, ch, out, job, 0, failed, name) for name, body, ch, out in plan]
+        try:
+            for f in as_completed(futs):
+                for el in f.result():
+                    els_by_id[(el["type"], el["id"])] = el
+                done += 1
+                if job:
+                    job.progress(done, len(plan), f"OSM: {done}/{len(plan)} запросов")
+        except BaseException:
+            for f in futs:
+                f.cancel()
+            raise
     if job:
         job.progress(len(plan), len(plan))
         if failed:

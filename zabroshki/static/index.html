@@ -112,6 +112,8 @@
       <pre id="evalBox" class="tags" style="display:none;max-height:340px"></pre>
       <h4>Параметры поиска</h4>
       <div class="form" id="optForm">
+        <label title="Быстрый: снимки качаются и проверяются только там, где может получиться надёжная метка (без открытой воды, дач и плотной застройки без тегов OSM, слабых кандидатов). Полный: всё подряд — нужно для режима полноты (снятая галочка «только надёжные»), заметно дольше.">Режим поиска:
+          <select id="optMode"><option value="fast">быстрый (мало, но верно)</option><option value="full">полный (дольше)</option></select></label>
         <label><input type="checkbox" id="optImagery" checked> Сплошной скан снимков (z<span id="zScan">17</span>)</label>
         <label><input type="checkbox" id="optFootprints" checked> Контуры зданий Microsoft</label>
         <label><input type="checkbox" id="optModels" checked> Нейросети (DINOv2 / SigLIP)</label>

@@ -260,3 +260,100 @@ def test_reliable_needs_strong_signal_without_osm_tag():
     assert scoring.reliable(c)                              # the roof vanished between imagery years
     c["f"]["in_dacha"] = True
     assert not scoring.reliable(c)                          # dachas need an OSM tag
+
+
+def test_water_like_overview():
+    from zabroshki.imagery import _water_like
+    rng = np.random.default_rng(0)
+    water = np.full((32, 32, 3), (28, 40, 52), np.uint8) + rng.integers(0, 3, (32, 32, 3)).astype(np.uint8)
+    forest = np.clip(rng.normal((40, 75, 35), 25, (32, 32, 3)), 0, 255).astype(np.uint8)
+    field = np.full((32, 32, 3), (150, 160, 110), np.uint8)
+    assert _water_like(water)
+    assert not _water_like(forest) and not _water_like(field)
+
+
+def test_never_reliable_and_promising():
+    dacha = _cand(in_dacha=True)
+    assert scoring.never_reliable(dacha) and not scoring.promising(dacha)
+    tagged = _cand(in_dacha=True)
+    tagged["tags"] = {"building": "ruins"}
+    assert not scoring.never_reliable(tagged) and scoring.promising(tagged)
+    forest = _cand(outside_settlement=True, pA=0.2, pA_trained=True)
+    assert not scoring.never_reliable(forest) and not scoring.promising(forest)   # z17 classifier sees nothing
+    forest["f"]["pA"] = 0.8
+    assert scoring.promising(forest)
+    assert scoring.never_reliable(C.new_candidate("de:1", 60.7, 28.7, "deadend"))
+    wall = _cand(in_military=True)
+    wall["tags"] = {"building": "castle_wall"}
+    assert scoring.never_reliable(wall)
+
+
+def test_fast_mode_selection_stage_b_and_wayback():
+    from zabroshki import stageb
+    from zabroshki import wayback as W
+    weak = _cand(outside_settlement=True, pA=0.1, pA_trained=True)
+    strong = _cand(outside_settlement=True, pA=0.9, pA_trained=True, pB=0.9, pB_trained=True)
+    dacha = _cand(in_dacha=True, pA=0.95, pA_trained=True)
+    ruin = _cand(in_settlement=True)
+    ruin["tags"] = {"building": "ruins"}
+    for i, (c, sc) in enumerate(((weak, 0.4), (strong, 0.3), (dacha, 0.5), (ruin, 0.6))):
+        c["score"], c["key"] = sc, f"osm:way/{i}"
+    cands = [weak, strong, dacha, ruin]
+    sel = stageb.select(cands, 100, 0.08, fast=True)
+    assert strong in sel and ruin in sel and weak not in sel and dacha not in sel
+    assert len(stageb.select(cands, 100, 0.08, fast=False)) == 4
+    wsel = W.select(cands, {"search_mode": "fast"})
+    assert wsel[0] is strong and ruin in wsel and dacha not in wsel and weak not in wsel
+    assert len(W.select(cands, {"search_mode": "full"})) == 4
+
+
+def test_scanner_plan_skips_dense_and_water():
+    from zabroshki.geo import tiles_for_polygon
+    from zabroshki.imagery import Scanner
+
+    class _Job:
+        def checkpoint(self):
+            pass
+
+        def progress(self, *a, **k):
+            pass
+
+        def info(self, *a):
+            pass
+    class _NoFeed:   # no network in unit tests
+        order: list = []
+
+        def add(self, xys):
+            pass
+
+        def close(self):
+            pass
+    poly = box(28.700, 60.700, 28.712, 60.706)
+    lp = LocalProj(60.703, 28.706)
+    sc = Scanner(poly, lp, {"search_mode": "fast", "use_models": False}, _Job())
+    sc.feeder = _NoFeed()
+    tl = tiles_for_polygon(poly, 17)
+    assert len(tl) >= 4
+    t_dense, t_mixed, t_water, t_water_b = tl[0], tl[1], tl[2], tl[3]
+    sc.water = {t_water, t_water_b}
+
+    def at(t, **f):
+        from zabroshki.geo import tile_bounds
+        w, s, e, n = tile_bounds(t[0], t[1], 17)
+        c = _cand(**f)
+        c["lat"], c["lon"] = (s + n) / 2, (w + e) / 2
+        return c
+    cands = [at(t_dense, in_dacha=True), at(t_dense, footprints_100m=40),
+             at(t_mixed, in_dacha=True), at(t_mixed, outside_settlement=True),
+             at(t_water_b, outside_settlement=True)]          # a building on an island: keep the tile
+    try:
+        sc.plan(cands)
+        assert t_dense in sc.skipped and t_water in sc.skipped
+        assert t_mixed not in sc.skipped and t_water_b not in sc.skipped
+        sc2 = Scanner(poly, lp, {"search_mode": "full", "use_models": False}, _Job())
+        sc2.feeder = _NoFeed()
+        sc2.plan(cands)
+        assert not sc2.skipped
+        sc2.close()
+    finally:
+        sc.close()

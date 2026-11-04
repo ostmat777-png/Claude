@@ -478,6 +478,38 @@ def confirmation(c) -> tuple[int, list, list]:
     return len(pos), pos, neg
 
 
+NOT_BUILDINGS = {"castle_wall", "wall", "city_wall", "roof", "carport", "bridge", "construction", "grandstand",
+                 "ship", "train_station_roof"}
+
+
+def never_reliable(c) -> bool:
+    """Can never become a reliable mark whatever the imagery shows (see reliable()). The fast search mode does not
+    spend downloads on such candidates: dachas, garages and dense settlements without an OSM tag, parks, museums,
+    protected areas, construction sites, cemeteries, road dead ends and clearings."""
+    f, t = c["f"], c["tags"]
+    if c["kind"] in ("deadend", "clearing"):
+        return True
+    if t.get("building") in NOT_BUILDINGS and t.get("building") != "ruins":
+        return True   # walls, roofs over platforms, carports … have no roof to collapse
+    if osm.lifecycle_strength(t)[0] >= 2.2 or "military" in t or f.get("in_military"):
+        return False
+    return bool(f.get("in_dacha") or dense_cluster(f) or f.get("in_garages") or f.get("in_park")
+                or f.get("in_museum") or f.get("in_protected") or f.get("in_construction") or f.get("in_cemetery"))
+
+
+def promising(c, pa_min=0.5) -> bool:
+    """Worth the expensive checks (z18 crop, Wayback) in the fast mode: an OSM lifecycle tag / military object, or the
+    z17 classifier already sees something (both classifiers >= 0.7 are needed for a reliable mark without a tag)."""
+    if never_reliable(c):
+        return False
+    f = c["f"]
+    if osm.lifecycle_strength(c["tags"])[0] > 0 or "military" in c["tags"] or f.get("in_military"):
+        return True
+    if not f.get("pA_trained"):
+        return True   # no classifier A (no torch / too few examples): cannot judge, keep it
+    return (f.get("pA") or 0) >= pa_min
+
+
 def strong_evidence(c) -> bool:
     """Both trained classifiers agree and the object stands out, the roof vanished between imagery years, or the VLM
     is confident."""
@@ -498,6 +530,8 @@ def reliable(c) -> bool:
     real building) AND nothing contradicts."""
     f, t = c["f"], c["tags"]
     if c.get("score", 0) < 0.5 or f.get("contra"):
+        return False
+    if t.get("building") in NOT_BUILDINGS:
         return False
     lc = osm.lifecycle_strength(t)[0]
     if (f.get("confirm_n") or 0) >= 2 and lc < 2.2:

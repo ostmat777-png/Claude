@@ -60,10 +60,17 @@ DEFAULTS: dict = {
     "use_models": True,
     "use_wayback": True,
     "use_vlm": "auto",        # "auto" = use if Ollama is reachable, True/False to force
+    # fast = spend downloads only where a reliable mark is possible (skip dachas/dense settlements without OSM tags,
+    # open water, weak candidates); full = scan and check everything (slower, for the "all candidates" view)
+    "search_mode": "fast",
+    "overpass_parallel": 2,   # simultaneous Overpass requests (public servers allow ~2 per IP)
     "stage_b_top_k": 1500,    # candidates that get a z18 crop + SigLIP
     "stage_b_min_score": 0.08,
     "wayback_top_k": 400,     # candidates that get the year-by-year comparison
     "wayback_max_minutes": 40,  # time budget of the Wayback stage (skipped/cut if the server is slow)
+    "wayback_top_k_fast": 250,
+    "retrain_new_crops": 300,  # "Дообучить": z18 crops for candidates that became promising
+    "wayback_max_minutes_fast": 25,
     "vlm_top_k": 150,
     "min_score_keep": 0.05,   # recall first: almost everything is kept
     "merge_radius_m": 18,
@@ -78,6 +85,7 @@ DEFAULTS: dict = {
     # --- training -----------------------------------------------------------
     "use_osm_weak_positives": True,
     "negatives_per_positive": 6,
+    "negatives_per_positive_b_fast": 3,   # classifier B negatives in the fast mode (each one costs a z18 crop)
     "min_negatives": 80,
     # optional contact (e-mail or URL) appended to the User-Agent for tile/Overpass server operators
     "contact": "",

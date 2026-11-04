@@ -32,6 +32,7 @@ class Job:
         self.log: list[str] = []
         self.started = time.time()
         self.stage_started = time.time()
+        self.stage_times: list = []
         self._resume = threading.Event()
         self._resume.set()
         self._cancel = False
@@ -65,6 +66,8 @@ class Job:
 
     # ------------------------------------------------------------ progress
     def set_stage(self, index: int, count: int, name: str):
+        if self.stage_index and self.stage:
+            self.stage_times.append((self.stage, time.time() - self.stage_started))
         self.stage_index, self.stage_count, self.stage = index, count, name
         self.done, self.total = 0, 0
         self.stage_started = time.time()
@@ -74,6 +77,13 @@ class Job:
         self.done, self.total = done, total
         if message is not None:
             self.message = message
+
+    def timings(self) -> list:
+        """[(stage name, seconds)] including the current stage."""
+        out = list(self.stage_times)
+        if self.stage_index and self.stage:
+            out.append((self.stage, time.time() - self.stage_started))
+        return out
 
     def info(self, msg: str):
         log.info(msg)

@@ -24,6 +24,89 @@ from .geo import TILE, lonlat_to_pixel, meters_per_pixel, pixel_to_lonlat, tile_
 log = logging.getLogger(__name__)
 
 
+# ------------------------------------------------------------------ open water from a coarse overview
+def _water_like(a: np.ndarray) -> bool:
+    veg, tree, lum, snow = veg_tree_masks(a)
+    g = a.astype(np.float32).mean(axis=2)
+    tex = np.abs(np.diff(g, axis=1)).mean()
+    return bool(lum.mean() < 70 and tex < 6 and tree.mean() < 0.03 and lum.max() < 200)
+
+
+def open_water_tiles(provider, z, tile_list, job=None, dz=3) -> set:
+    """Scan tiles that are open water, judged on a z-3 overview (64x fewer downloads). Conservative: the tile AND
+    its 8 neighbours must look like water, so shores, islands and piers are always scanned."""
+    zo = z - dz
+    k = TILE >> dz
+    over = sorted({(x >> dz, y >> dz) for x, y in tile_list})
+    tiles.prefetch(provider, zo, over, checkpoint=job.checkpoint if job else None,
+                   progress=(lambda d, n: job.progress(d, n, f"Обзор местности z{zo}: {d}/{n}")) if job else None)
+    cache: dict = {}
+
+    def is_w(x, y):
+        key = (x >> dz, y >> dz)
+        if key not in cache:
+            cache[key] = tiles.tile_array(provider, zo, *key, fetch=False)
+        a = cache[key]
+        if a is None:
+            return False
+        sx, sy = (x - (key[0] << dz)) * k, (y - (key[1] << dz)) * k
+        return _water_like(a[sy:sy + k, sx:sx + k])
+    wl = {t: is_w(*t) for t in tile_list}
+    return {(x, y) for (x, y), w in wl.items()
+            if w and all(wl.get((x + dx, y + dy), False) for dx in (-1, 0, 1) for dy in (-1, 0, 1))}
+
+
+class TileFeeder:
+    """Downloads tiles in the background, in the order they were added (the polite per-server rate limit applies),
+    so the scan can work on tiles that already arrived while others are still downloading, and downloads can start
+    while OSM data is still loading."""
+
+    def __init__(self, provider, z, checkpoint=None, threads=None):
+        from concurrent.futures import ThreadPoolExecutor
+        from .config import settings
+        self.provider, self.z = provider, z
+        self.checkpoint = checkpoint
+        self.ex = ThreadPoolExecutor(max_workers=threads or settings()["download_threads"])
+        self.futs: dict = {}
+        self.order: list = []
+        self.stopped = False
+        self.n_new = 0
+
+    def add(self, xys):
+        xys = [xy for xy in xys if xy not in self.futs]
+        have = db.tiles_cached(self.provider, self.z, xys) if xys else set()
+        for xy in xys:
+            self.order.append(xy)
+            self.futs[xy] = None if xy in have else self.ex.submit(self._get, xy)
+
+    def _get(self, xy):
+        if self.stopped:
+            return None
+        try:
+            if self.checkpoint:
+                self.checkpoint()   # blocks while the search is paused
+            st = tiles.fetch_tile(self.provider, self.z, xy[0], xy[1])[0]
+            self.n_new += 1
+            return st
+        except Exception:
+            return None
+
+    def wait(self, xy, timeout=180):
+        f = self.futs.get(xy)
+        if f is not None:
+            try:
+                f.result(timeout=timeout)
+            except Exception:
+                pass
+
+    def pending(self) -> int:
+        return sum(1 for f in self.futs.values() if f is not None and not f.done())
+
+    def close(self):
+        self.stopped = True
+        self.ex.shutdown(wait=False, cancel_futures=True)
+
+
 # ------------------------------------------------------------------ classical indices
 def veg_tree_masks(img: np.ndarray):
     """Returns (vegetation mask, tree mask, luminance, snow_fraction) for an RGB uint8 image.
@@ -101,9 +184,75 @@ class Scanner:
         self.tx0, self.ty0 = min(xs), min(ys)
         self.nx, self.ny = max(xs) - self.tx0 + 1, max(ys) - self.ty0 + 1
         self.mpp = meters_per_pixel(poly.centroid.y, self.z)
+        self.scan_tiles = list(self.tiles)
+        self.skipped: set = set()
+        self.water: set = set()
+        self.det_sample: list | None = None
+        self.raster = None
+        self.feeder = None
+
+    # -------------------------------------------------------------- plan (fast mode) + background download
+    def prepare(self, fps, job=None):
+        """Before OSM: open-water overview, the detector training sample and background download of the tiles that
+        are needed in any case (no known buildings: forest, fields)."""
+        fast = self.opts.get("search_mode", "fast") == "fast"
+        fp_tree = STRtree(list(fps)) if fps else None
+
+        def has_b(t):
+            w, s, e, n = tile_bounds(t[0], t[1], self.z)
+            return fp_tree is not None and len(fp_tree.query(box(w, s, e, n))) > 0
+        with_b = {t for t in self.tiles if has_b(t)}
+        if fast:
+            try:
+                self.water = {t for t in open_water_tiles(self.provider, self.z, self.tiles, job) if t not in with_b}
+            except Exception as e:
+                from .jobs import Cancelled
+                if isinstance(e, Cancelled):
+                    raise
+                log.warning("water overview failed: %s", e)
+        rng = random.Random(42)
+        from .models import accelerated, torch_available
+        n_train = min(len(self.tiles), 500 if (torch_available() and accelerated()) else 220)
+        wb = sorted(with_b)
+        wo = [t for t in self.tiles if t not in with_b and t not in self.water]
+        sample = rng.sample(wb, min(len(wb), int(n_train * 0.7)))
+        sample += rng.sample(wo, min(len(wo), n_train - len(sample)))
+        self.det_sample = sample
+        self.feeder = TileFeeder(self.provider, self.z, checkpoint=self.job.checkpoint)
+        if self.opts.get("use_models"):
+            self.feeder.add(sample)
+        self.feeder.add([t for t in self.tiles if t not in with_b and t not in self.water])
+        self.stats["water_tiles_skipped"] = len(self.water)
+        return len(self.feeder.order)
+
+    def plan(self, cands):
+        """After OSM: in the fast mode skip tiles where no candidate can ever become a reliable mark (dachas, dense
+        settlements, garages, parks … without OSM lifecycle tags) and open water without buildings."""
+        from .scoring import never_reliable
+        skip = set(self.water)
+        if self.opts.get("search_mode", "fast") == "fast":
+            by_tile: dict = {}
+            for c in cands:
+                px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
+                by_tile.setdefault((int(px // TILE), int(py // TILE)), []).append(c)
+            dense = {t for t, cl in by_tile.items() if all(never_reliable(c) for c in cl)}
+            skip = (skip - set(by_tile)) | dense
+            self.stats["dense_tiles_skipped"] = len(dense & set(self.tiles))
+        self.skipped = skip & set(self.tiles)
+        self.scan_tiles = [t for t in self.tiles if t not in self.skipped]
+        self.stats["scan_tiles"] = len(self.scan_tiles)
+        if self.feeder is None:
+            self.feeder = TileFeeder(self.provider, self.z, checkpoint=self.job.checkpoint)
+        self.feeder.add(self.scan_tiles)
+        return len(self.skipped)
+
+    def close(self):
+        if self.feeder is not None:
+            self.feeder.close()
 
     # -------------------------------------------------------------- download
     def download(self):
+        """Blocking download of all scan tiles (old behaviour; the pipeline now streams tiles into the scan)."""
         t = time.time()
         res = tiles.prefetch(self.provider, self.z, self.tiles,
                              progress=lambda d, n: self.job.progress(d, n, f"Тайлы z{self.z}: {d}/{n}"),
@@ -149,6 +298,8 @@ class Scanner:
         self.valid_g = np.zeros((H, W), bool)
         known_polys = [b["geom"] for b in osmdata.buildings if b["geom"].geom_type in ("Polygon", "MultiPolygon")] + list(fps)
         self.raster = FootprintRaster(known_polys, self.z)
+        if self.feeder is None:
+            self.plan(cands)
 
         # candidates per tile (for embeddings)
         by_tile: dict = {}
@@ -159,8 +310,10 @@ class Scanner:
         if self.use_models:
             self._train_detector()
 
-        # ---- full pass
-        order = list(self.tiles)
+        # ---- full pass (tiles stream in from the background downloader, in the order it fetches them)
+        want = set(self.scan_tiles)
+        order = [t for t in self.feeder.order if t in want]
+        order += [t for t in self.scan_tiles if t not in set(order)]
         B = self.dino.batch if self.dino else 8
         t0 = time.time()
         snowy = 0
@@ -169,6 +322,7 @@ class Scanner:
             chunk = order[i:i + B]
             imgs, keep = [], []
             for (tx, ty) in chunk:
+                self.feeder.wait((tx, ty))
                 a = tiles.tile_array(self.provider, self.z, tx, ty, fetch=False)
                 if a is None:
                     a = tiles.tile_array(self.provider, self.z, tx, ty, fetch=True)
@@ -202,8 +356,11 @@ class Scanner:
                         self.cand_emb[c["key"]] = self._pool(tk, tile_mean, c["lon"], c["lat"], tx, ty)
             done = min(i + B, len(order))
             el = time.time() - t0
-            job.progress(done, len(order), f"Скан z{self.z}: {done}/{len(order)} тайлов, {done / max(el, 1e-3):.1f} т/с")
+            pend = self.feeder.pending()
+            job.progress(done, len(order), f"Скан z{self.z}: {done}/{len(order)} тайлов, {done / max(el, 1e-3):.1f} т/с"
+                         + (f" (ещё скачивается {pend})" if pend else ""))
         self.stats["snowy_tiles"] = snowy
+        self.stats["tiles_downloaded"] = self.feeder.n_new
         if self.use_models:
             self._store_embeddings(cands)
 
@@ -219,11 +376,16 @@ class Scanner:
         # ---- per-candidate features for existing candidates (tile order keeps the decoded-tile LRU warm)
         allc = sorted(cands, key=lambda c: (int(lonlat_to_pixel(c["lon"], c["lat"], self.z)[1] // TILE),
                                             int(lonlat_to_pixel(c["lon"], c["lat"], self.z)[0] // TILE)))
+        from .scoring import never_reliable
+        fast = self.opts.get("search_mode", "fast") == "fast"
         for i, c in enumerate(allc):
             if i % 200 == 0:
                 job.checkpoint()
                 job.progress(i, len(allc), f"Признаки кандидатов по снимку: {i}/{len(allc)}")
-            c["f"].update(self.candidate_features(c))
+            px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
+            if (int(px // TILE), int(py // TILE)) in self.skipped:
+                continue   # no imagery downloaded here on purpose (fast mode)
+            c["f"].update(self.candidate_features(c, fetch=not (fast and never_reliable(c))))
         for c in new:
             c["f"].update(self.candidate_features(c))
         self.relative_overgrowth(allc + new)
@@ -234,6 +396,9 @@ class Scanner:
             # only used outside settlements and dense dacha clusters (see scoring.road_overgrown)
             from .scoring import dense_cluster
             if c["f"].get("in_settlement") or dense_cluster(c["f"]):
+                continue
+            px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
+            if (int(px // TILE), int(py // TILE)) in self.skipped:
                 continue
             if i % 200 == 0:
                 job.checkpoint()
@@ -263,8 +428,13 @@ class Scanner:
                 without.append(t)
         from .models import accelerated
         n_train = min(len(self.tiles), 500 if accelerated() else 220)
-        sample = rng.sample(with_b, min(len(with_b), int(n_train * 0.7)))
-        sample += rng.sample(without, min(len(without), n_train - len(sample)))
+        if self.det_sample:
+            sample = list(self.det_sample)
+            for t in sample:
+                self.feeder.wait(t)
+        else:
+            sample = rng.sample(with_b, min(len(with_b), int(n_train * 0.7)))
+            sample += rng.sample(without, min(len(without), n_train - len(sample)))
         if len(with_b) < 5:
             job.info("Слишком мало известных зданий для обучения детектора — детектор отключён")
             return
@@ -461,9 +631,9 @@ class Scanner:
         return out
 
     # -------------------------------------------------------------- per candidate
-    def candidate_features(self, c) -> dict:
+    def candidate_features(self, c, fetch=True) -> dict:
         fp = c.get("footprint")
-        f = crop_features(self.provider, self.z, c, self.mpp)
+        f = crop_features(self.provider, self.z, c, self.mpp, fetch=fetch)
         if not f.get("img_valid") or f.get("snow"):
             return f
         rr, cc = self.cell_of(c["lon"], c["lat"])
@@ -585,10 +755,10 @@ def footprint_mask(c, z, size):
     return fpm
 
 
-def crop_features(provider, z, c, mpp, size=160, img=None) -> dict:
+def crop_features(provider, z, c, mpp, size=160, img=None, fetch=True) -> dict:
     """Pixel-level vegetation features around a candidate (footprint, yard ring)."""
     if img is None:
-        img, valid = tiles.crop_lonlat(provider, z, c["lon"], c["lat"], size, fetch=True)
+        img, valid = tiles.crop_lonlat(provider, z, c["lon"], c["lat"], size, fetch=fetch)
     else:
         valid = 1.0
     if valid < 0.5:

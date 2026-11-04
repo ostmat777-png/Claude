@@ -157,14 +157,64 @@ def _crop_detector(scan, img):
     return bp, emb
 
 
+def select(cands, opts) -> list:
+    """Candidates for the year-by-year comparison. Fast mode: only those that can still become reliable marks:
+    first the ones without an OSM tag that both classifiers like (history is their missing second source), then
+    OSM-tagged objects (history = confirmation + fresh clearing for the guard status), then the rest."""
+    pool = [c for c in cands if c["kind"] not in ("deadend", "complex")]
+    if opts.get("search_mode", "fast") != "fast":
+        pool.sort(key=lambda c: (-(c.get("stage", 1) >= 2), -c["score"]))
+        return pool[:int(opts.get("wayback_top_k", 400))]
+    from . import osm
+    from .scoring import promising
+    pool = [c for c in pool if promising(c)]
+
+    def pri(c):
+        f = c["f"]
+        tagged = osm.lifecycle_strength(c["tags"])[0] >= 2.2 or "military" in c["tags"] or f.get("in_military")
+        pb = f.get("pB") if f.get("pB_trained") else None
+        group = 1 if tagged else (0 if (pb is None or pb >= 0.5) else 2)
+        return group, -c["score"]
+    pool.sort(key=pri)
+    return pool[:min(int(opts.get("wayback_top_k", 400)), int(opts.get("wayback_top_k_fast", 250)))]
+
+
+def prefetch_versions(cands, opts, z, checkpoint=None):
+    """Background warm-up (runs during the z18 check): lists of distinct imagery versions and their capture dates
+    for the likely Wayback selection. Everything lands in the HTTP cache; errors are ignored."""
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        releases()
+    except Exception:
+        return
+    sel = select(cands, opts)
+    tl = {}
+    for c in sel:
+        tl.setdefault(lonlat_to_tile(c["lon"], c["lat"], z), c)
+    fails = [0]
+
+    def one(item):
+        (x, y), c = item
+        if fails[0] >= 5:
+            return
+        try:
+            if checkpoint:
+                checkpoint()
+            for r in distinct_versions(z, x, y)[:8]:
+                capture_date(r, c["lat"], c["lon"], z)
+        except Exception:
+            fails[0] += 1
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        list(ex.map(one, list(tl.items())))
+
+
 def run(job, cands, opts, scan):
     from .imagery import crop_features
-    k = int(opts.get("wayback_top_k", 400))
-    pool = [c for c in cands if c["kind"] not in ("deadend",)]
-    pool.sort(key=lambda c: (-(c.get("stage", 1) >= 2), -c["score"]))
-    sel = pool[:k]
+    sel = select(cands, opts)
     if not sel:
         return
+    if opts.get("search_mode", "fast") == "fast":
+        opts = dict(opts, wayback_max_minutes=opts.get("wayback_max_minutes_fast", 25))
     z = int(opts.get("scan_zoom", 17))
     try:
         releases()

@@ -210,6 +210,7 @@ async function deleteArea() {
 /* ------------------------------------------------------------------ search / job */
 function searchOptions() {
   return {
+    search_mode: $('#optMode').value,
     use_imagery: $('#optImagery').checked,
     use_footprints: $('#optFootprints').checked,
     use_models: $('#optModels').checked,
@@ -640,6 +641,7 @@ async function loadModelInfo() {
 async function loadSettings() {
   const s = await api('/api/settings');
   S.settings = s;
+  $('#optMode').value = s.search_mode === 'full' ? 'full' : 'fast';
   $('#optImagery').checked = !!s.use_imagery;
   $('#optFootprints').checked = !!s.use_footprints;
   $('#optModels').checked = !!s.use_models;

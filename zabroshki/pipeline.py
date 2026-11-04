@@ -128,9 +128,10 @@ def run_search(job, run_id: int):
     use_models = bool(opts.get("use_models")) and use_img
     use_wb = bool(opts.get("use_wayback")) and use_img
     vlm_opt = opts.get("use_vlm", "auto")
-    stage_names = ["OSM (Overpass)", "Контуры зданий Microsoft", "Кандидаты и контекст OSM"]
+    fast = opts.get("search_mode", "fast") == "fast"
+    stage_names = ["Контуры зданий Microsoft и обзор местности", "OSM (Overpass)", "Кандидаты и контекст OSM"]
     if use_img:
-        stage_names += ["Снимки: загрузка тайлов", "Снимки: сплошной скан"]
+        stage_names += ["Снимки: загрузка и сплошной скан"]
     if use_models:
         stage_names += ["Модель: обучение на примерах", "Точная проверка (z18, SigLIP)"]
     if use_wb:
@@ -153,9 +154,25 @@ def run_search(job, run_id: int):
     except Exception:
         weights = None
 
+    scan = None
+    wb_thread = None
+    t_start = time.time()
     try:
-        # 1. OSM
+        # 1. footprints + water overview; tiles that are needed anyway start downloading in the background
         stage(stage_names[0])
+        fps = footprints.load(poly, job) if opts.get("use_footprints") else []
+        stats["ms_footprints"] = len(fps)
+        job.info(f"Контуры Microsoft: {len(fps)}")
+        if use_img:
+            from . import imagery
+            scan = imagery.Scanner(poly, lp, opts, job)
+            n_bg = scan.prepare(fps, job)
+            job.info(f"Тайлов снимка z{scan.z} в области: {len(scan.tiles)}"
+                     + (f", открытая вода (пропуск): {len(scan.water)}" if scan.water else "")
+                     + f"; {n_bg} тайлов (лес, поля, обучение детектора) скачиваются в фоне, пока грузится OSM")
+
+        # 2. OSM
+        stage(stage_names[1])
         try:
             els, failed = osm.fetch_area(poly, job)
         except Exception as e:
@@ -168,12 +185,6 @@ def run_search(job, run_id: int):
         job.info(f"OSM: зданий {len(d.buildings)}, lifecycle {len(d.lifecycle)}, военных {len(d.military)}, "
                  f"дорог {len(d.highways)}, ограждений {len(d.barriers_line) + len(d.barriers_node)}")
 
-        # 2. footprints
-        stage(stage_names[1])
-        fps = footprints.load(poly, job) if opts.get("use_footprints") else []
-        stats["ms_footprints"] = len(fps)
-        job.info(f"Контуры Microsoft: {len(fps)}")
-
         # 3. candidates
         stage(stage_names[2])
         cands, ctx = C.assemble(d, fps, lp, poly, job)
@@ -184,13 +195,13 @@ def run_search(job, run_id: int):
         save_candidates(run_id, cands, stats=stats)
         job.info(f"Кандидатов после OSM/контуров: {len(cands)}")
 
-        scan = None
         if use_img:
-            from . import imagery
             stage(stage_names[k])
-            scan = imagery.Scanner(poly, lp, opts, job)
-            scan.download()
-            stage(stage_names[k])
+            n_skip = scan.plan(cands)
+            if n_skip:
+                job.info(f"Быстрый режим: не сканируется {n_skip} из {len(scan.tiles)} тайлов — открытая вода и "
+                         f"дачи/плотная застройка, где надёжной метки быть не может "
+                         f"(полный скан: «Режим поиска: полный»)")
             new = scan.run(cands, ctx, fps, d)
             if new:
                 C.compute_context(new, ctx, job, failed)
@@ -224,6 +235,13 @@ def run_search(job, run_id: int):
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
             stage(stage_names[k])
+            if use_wb and fast:   # collect imagery dates for the likely Wayback set while the z18 check runs
+                import threading
+                from . import wayback as _wb
+                wb_thread = threading.Thread(target=_wb.prefetch_versions,
+                                             args=(cands, opts, int(opts.get("scan_zoom", 17)), job.checkpoint),
+                                             daemon=True)
+                wb_thread.start()
             optional("Точная проверка", stageb.run, job, cands, opts)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
@@ -231,6 +249,11 @@ def run_search(job, run_id: int):
         if use_wb:
             from . import wayback
             stage(stage_names[k])
+            if wb_thread is not None and wb_thread.is_alive():
+                job.info("Wayback: дожидаюсь списка дат снимков (собирается в фоне)…")
+                while wb_thread.is_alive():
+                    job.checkpoint()
+                    wb_thread.join(timeout=1.0)
             optional("Wayback", wayback.run, job, cands, opts, scan)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)
@@ -256,7 +279,12 @@ def run_search(job, run_id: int):
         stats["yellow"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "yellow")
         stats["confirmed"] = sum(1 for c in cands if c["score"] >= keep and (c["f"].get("confirm_n") or 0) >= 2)
         stats["reliable"] = sum(1 for c in cands if c["f"].get("reliable") and not c["f"].get("complex_key"))
+        tm = job.timings()
+        stats["timings"] = [(n_, round(t_)) for n_, t_ in tm]
+        stats["total_s"] = round(time.time() - t_start)
         save_candidates(run_id, cands, status="done", stats=stats)
+        job.info("Время поиска: " + _fmt_s(stats["total_s"]) + " — " +
+                 "; ".join(f"{n_}: {_fmt_s(t_)}" for n_, t_ in tm if t_ >= 1))
         job.info(f"Итого кандидатов: {stats['above_keep']} (красных {stats['red']}, жёлтых {stats['yellow']}, "
                  f"зелёных {stats['green']}); надёжных объектов (показываются по умолчанию): {stats['reliable']}")
         return stats
@@ -272,6 +300,18 @@ def run_search(job, run_id: int):
         except Exception:
             log.exception("save on error failed")
         raise
+    finally:
+        if scan is not None:
+            scan.close()
+
+
+def _fmt_s(sec) -> str:
+    sec = int(sec)
+    if sec >= 3600:
+        return f"{sec // 3600} ч {sec % 3600 // 60:02d} мин"
+    if sec >= 60:
+        return f"{sec // 60} мин {sec % 60:02d} с"
+    return f"{sec} с"
 
 
 def _add_complexes(cands, lp, job=None):

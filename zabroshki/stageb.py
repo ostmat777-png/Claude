@@ -57,7 +57,12 @@ def embed_points_B(points, provider=None, z=None, job=None):
     return out
 
 
-def select(cands, k, min_score):
+def select(cands, k, min_score, fast=False):
+    """Candidates for the z18 check. Fast mode: only those that can still become a reliable mark (OSM-tagged or
+    military objects, and the rest only if the z17 classifier already sees something), see scoring.promising."""
+    if fast:
+        from .scoring import promising
+        cands = [c for c in cands if promising(c)]
     labels_like = [c for c in cands if osm.lifecycle_strength(c["tags"])[0] > 0]
     ranked = sorted([c for c in cands if c["kind"] != "deadend" and c["score"] >= min_score],
                     key=lambda c: -c["score"])[:k]
@@ -75,7 +80,8 @@ def run(job, cands, opts):
         job.info("PyTorch не установлен — точная проверка пропущена")
         return
     k = int(opts.get("stage_b_top_k", 1500))
-    sel = select(cands, k, float(opts.get("stage_b_min_score", 0.08)))
+    fast = opts.get("search_mode", "fast") == "fast"
+    sel = select(cands, k, float(opts.get("stage_b_min_score", 0.08)), fast=fast)
     if not sel:
         return
     provider = opts.get("imagery_provider", "esri")
@@ -95,6 +101,8 @@ def run(job, cands, opts):
         c["f"]["zs_nobuilding"] = round(float(pn), 4)
         c["stage"] = max(c.get("stage", 1), 2)
     from .training import train_B
+    if fast:   # every negative costs a z18 crop
+        opts = dict(opts, negatives_per_positive=opts.get("negatives_per_positive_b_fast", 3))
     clf = train_B(job, cands, opts, lambda pts: embed_points_B(pts, provider, z, job))
     if clf is not None:
         p = clf.predict_proba(E)[:, 1]
@@ -113,6 +121,24 @@ def retrain_B(job, pool, opts):
     clf = train_B(job, pool, opts, lambda pts: embed_points_B(pts, provider, z, job))
     if clf is None:
         return
+    # candidates that became promising after retraining A (e.g. thanks to your marks) but never got a z18 crop
+    from .scoring import promising
+    newp = [c for c in pool if promising(c) and c["kind"] not in ("deadend", "complex")
+            and emb_key(sg.name, provider, z, c["lat"], c["lon"]) not in have]
+    newp.sort(key=lambda c: -c["score"])
+    newp = newp[:int(opts.get("retrain_new_crops", 300))]
+    if newp:
+        job.info(f"Точная проверка z{z} для {len(newp)} новых перспективных кандидатов")
+        embs = embed_points_B([(c["lat"], c["lon"]) for c in newp], provider, z, job)
+        ok = [(c, e) for c, e in zip(newp, embs) if e is not None]
+        if ok:
+            zs = sg.zero_shot(np.stack([e for _, e in ok]))
+            for (c, e), pa, pc, pn in zip(ok, zs["abandoned"], zs["cars"], zs["nobuilding"]):
+                c["f"]["zs_abandoned"] = round(float(pa), 4)
+                c["f"]["zs_cars"] = round(float(pc), 4)
+                c["f"]["zs_nobuilding"] = round(float(pn), 4)
+                c["stage"] = max(c.get("stage", 1), 2)
+                have[emb_key(sg.name, provider, z, c["lat"], c["lon"])] = e
     rows = [(c, have.get(emb_key(sg.name, provider, z, c["lat"], c["lon"]))) for c in pool]
     rows = [(c, e) for c, e in rows if e is not None]
     if rows:

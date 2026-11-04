@@ -177,8 +177,9 @@ def _near(lat, lon, items, radius_m):
     return best
 
 
-def build_training_points(cands, opts, rng=None):
-    """Returns list of (lat, lon, y, weight, source)."""
+def build_training_points(cands, opts, rng=None, neg_ok=None):
+    """Returns list of (lat, lon, y, weight, source). neg_ok(c): automatic negatives only among these candidates
+    (e.g. ones whose image embedding is already computed, so training needs no extra downloads)."""
     rng = rng or random.Random(7)
     pts = []
     pos = read_positives()
@@ -206,6 +207,10 @@ def build_training_points(cands, opts, rng=None):
             and c.get("footprint") is not None
             and not osm.is_lifecycle(c["tags"]) and not c.get("parent_lifecycle")
             and not c["f"].get("in_military")]
+    if neg_ok is not None:
+        pref = [c for c in pool if neg_ok(c)]
+        if len(pref) >= opts.get("min_negatives", 80):
+            pool = pref
     rng.shuffle(pool)
     n_neg = max(opts.get("min_negatives", 80), opts.get("negatives_per_positive", 6) * n_pos_all)
     # Match the negatives' tree-cover distribution to the positives', otherwise the classifier simply
@@ -282,7 +287,7 @@ def train_and_score_A(job, cands, opts, scan):
         job.info("Классификатор A пропущен (нет эмбеддингов)")
         return
     from .imagery import embed_points_A
-    pts, n_real = build_training_points(cands, opts)
+    pts, n_real = build_training_points(cands, opts, neg_ok=lambda c: scan.embedding(c) is not None)
     if sum(1 for p in pts if p[2] == 1) < 3:
         job.info("Положительных примеров < 3 — классификатор A не обучается (работают эвристики и zero-shot)")
         return
