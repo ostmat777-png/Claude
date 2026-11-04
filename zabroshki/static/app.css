@@ -134,3 +134,11 @@ h4 { margin: 10px 0 2px; }
 .notes { padding-left: 16px; margin: 2px 0; font-size: 12.5px; }
 .notes li { margin: 3px 0; }
 .years figcaption a { font-size: 10px; }
+
+#dateGroup select { max-width: 190px; }
+#topbar { gap: 10px; }
+#dateGroup.active select { border-color: #f4c430; color: #f4c430; }
+@media (max-width: 820px) { #dateGroup select { max-width: 160px; } #dateLocal { font-size: 12px; } }
+
+@media (max-width: 1750px) { #areaInfo { display: none; } }
+@media (max-width: 1500px) { .lbl { display: none; } #progress { min-width: 160px; } }

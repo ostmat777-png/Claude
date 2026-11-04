@@ -18,9 +18,16 @@
     <button data-base="map">Схема</button>
   </div>
 
+  <div class="group" id="dateGroup" title="Дата спутникового снимка (архив Esri Wayback)">
+    <button id="datePrev" title="Снимок постарше">◀</button>
+    <select id="dateSelect"><option value="">📅 Текущий снимок</option></select>
+    <button id="dateNext" title="Снимок поновее">▶</button>
+    <button id="dateLocal" title="Найти реальные даты съёмки в этом месте карты">📍</button>
+  </div>
+
   <div class="group">
-    <button id="btnRect" title="Выделить область рамкой">▭ Рамка</button>
-    <button id="btnPoly" title="Выделить область полигоном">⬠ Полигон</button>
+    <button id="btnRect" title="Выделить область рамкой">▭<span class="lbl"> Рамка</span></button>
+    <button id="btnPoly" title="Выделить область полигоном">⬠<span class="lbl"> Полигон</span></button>
     <button id="btnClear" title="Убрать выделение">✕</button>
     <span id="areaInfo" class="muted"></span>
   </div>

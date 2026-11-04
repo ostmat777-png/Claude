@@ -71,7 +71,8 @@ def tile(provider: str, z: int, x: int, y: int):
     if not provider.startswith("wayback:") and provider not in tiles.providers():
         raise HTTPException(404)
     status, data = tiles.fetch_tile(provider, z, x, y, interactive=True)
-    if status == 204 and z > 3:
+    is_imagery = provider.startswith("wayback:") or tiles.providers().get(provider, {}).get("kind") == "sat"
+    if (status == 204 or (status == 404 and is_imagery)) and z > 3:
         # "no imagery at this zoom" placeholder -> upscale the parent tile instead
         for dz in range(1, 4):
             ps, pdata = tiles.fetch_tile(provider, z - dz, x >> dz, y >> dz, interactive=True)
@@ -98,6 +99,48 @@ def get_providers():
 
 
 # ------------------------------------------------------------------ settings
+@app.get("/api/wayback/releases")
+def wayback_releases():
+    """All Esri Wayback releases (newest first) + the latest release of every year."""
+    from . import wayback
+    try:
+        rels = wayback.releases()
+    except Exception as e:
+        raise HTTPException(503, f"Wayback недоступен: {e}")
+    years = {}
+    for r in rels:  # newest first -> first seen per year is the latest of that year
+        y = (r["date"] or "")[:4]
+        if y and y not in years:
+            years[y] = r
+    return {"releases": [{"release": r["release"], "date": r["date"]} for r in rels],
+            "years": [{"year": y, "release": r["release"], "date": r["date"]} for y, r in years.items()]}
+
+
+@app.get("/api/wayback/local")
+def wayback_local(lat: float, lon: float, z: int = 16):
+    """Distinct imagery versions at this place with real acquisition dates (like the Esri Wayback app)."""
+    from . import wayback
+    from .geo import lonlat_to_tile
+    zz = max(12, min(int(z), 17))
+    x, y = lonlat_to_tile(lon, lat, zz)
+    try:
+        vers = wayback.distinct_versions(zz, x, y, max_versions=14)
+    except Exception as e:
+        raise HTTPException(503, f"Wayback недоступен: {e}")
+    rel_dates = {r["release"]: r["date"] for r in wayback.releases()}
+    out, seen = [], set()
+    for r in vers:
+        md = wayback.capture_date(r, lat, lon, zz)
+        d = md.get("date")
+        key = d or f"r{r}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"release": r, "date": d, "release_date": rel_dates.get(r), "src": md.get("src"),
+                    "res": md.get("res")})
+    return {"z": zz, "versions": out}
+
+
 @app.get("/api/settings")
 def get_settings():
     return settings().data

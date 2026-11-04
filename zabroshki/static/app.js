@@ -56,6 +56,83 @@ function initMap() {
   });
 }
 
+/* ------------------------------------------------------------------ imagery date (Esri Wayback) */
+function satUrl() {
+  return S.imgRelease ? `/tiles/wayback:${S.imgRelease}/{z}/{x}/{y}` : '/tiles/esri/{z}/{x}/{y}';
+}
+
+function setImageryRelease(release, label) {
+  S.imgRelease = release || null;
+  const oldAttr = S.layers.sat.options.attribution;
+  const newAttr = release ? `Esri World Imagery Wayback · снимок ${esc(label || '')}` : 'Imagery © Esri, Maxar, Earthstar Geographics';
+  S.layers.sat.options.attribution = newAttr;
+  if (S.map.hasLayer(S.layers.sat) && S.map.attributionControl) {
+    S.map.attributionControl.removeAttribution(oldAttr);
+    S.map.attributionControl.addAttribution(newAttr);
+  }
+  S.layers.sat.setUrl(satUrl());
+  if (S.base === 'map') setBase('sat');
+  const sel = $('#dateSelect');
+  if (sel.value !== String(release || '')) sel.value = String(release || '');
+  $('#dateGroup').classList.toggle('active', !!release);
+}
+
+async function loadReleaseYears() {
+  try {
+    const r = await api('/api/wayback/releases');
+    S.releaseYears = r.years;
+    fillDateSelect('years');
+  } catch (e) { $('#dateSelect').title = 'Архив снимков недоступен: ' + e.message; }
+}
+
+function fillDateSelect(mode) {
+  const sel = $('#dateSelect');
+  const cur = S.imgRelease ? String(S.imgRelease) : '';
+  let opts = '<option value="">📅 Текущий снимок</option>';
+  if (mode === 'local' && S.localVersions) {
+    opts += '<optgroup label="Снимки этого места (дата съёмки)">' + S.localVersions.map((v) =>
+      `<option value="${v.release}">${esc(v.date || ('выпуск ' + v.release_date))}${v.src ? ' · ' + esc(v.src) : ''}</option>`).join('') + '</optgroup>';
+  }
+  if (S.releaseYears) {
+    opts += '<optgroup label="По годам (последний выпуск архива)">' + S.releaseYears.map((y) =>
+      `<option value="${y.release}">${y.year} (выпуск ${esc(y.date)})</option>`).join('') + '</optgroup>';
+  }
+  sel.innerHTML = opts;
+  sel.value = cur;
+  if (sel.value !== cur && cur) {  // keep a release chosen earlier even if it is not in the lists
+    sel.insertAdjacentHTML('beforeend', `<option value="${cur}">выпуск ${cur}</option>`);
+    sel.value = cur;
+  }
+}
+
+async function loadLocalDates() {
+  const c = S.map.getCenter();
+  const btn = $('#dateLocal');
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const r = await api(`/api/wayback/local?lat=${c.lat.toFixed(5)}&lon=${c.lng.toFixed(5)}&z=${Math.round(S.map.getZoom())}`);
+    S.localVersions = r.versions;
+    S.localCenter = S.map.getCenter();
+    fillDateSelect('local');
+    btn.textContent = `📍 ${r.versions.length}`;
+    btn.title = `Здесь ${r.versions.length} разных снимков — выберите дату в списке`;
+  } catch (e) {
+    btn.textContent = '📍';
+    alert('Не удалось получить даты снимков: ' + e.message);
+  } finally { btn.disabled = false; }
+}
+
+function stepImagery(dir) {
+  // ordered list: newest first (local versions if loaded, otherwise years); index -1 = current imagery
+  const list = (S.localVersions && S.localVersions.length ? S.localVersions.map((v) => ({ release: v.release, label: v.date || v.release_date }))
+    : (S.releaseYears || []).map((y) => ({ release: y.release, label: y.year })));
+  if (!list.length) return;
+  let i = list.findIndex((v) => v.release === S.imgRelease);
+  i = Math.max(-1, Math.min(list.length - 1, i + dir));
+  if (i < 0) setImageryRelease(null);
+  else setImageryRelease(list[i].release, list[i].label);
+}
+
 function setBase(b) {
   S.base = b;
   const m = S.map;
@@ -532,6 +609,19 @@ async function doExport(fmt) {
 /* ------------------------------------------------------------------ wiring */
 function wire() {
   $$('#baseSeg button').forEach((b) => b.addEventListener('click', () => setBase(b.dataset.base)));
+  $('#dateSelect').onchange = () => {
+    const v = $('#dateSelect').value;
+    setImageryRelease(v ? +v : null, $('#dateSelect').selectedOptions[0].textContent);
+  };
+  $('#datePrev').onclick = () => stepImagery(+1);
+  $('#dateNext').onclick = () => stepImagery(-1);
+  $('#dateLocal').onclick = loadLocalDates;
+  S.map.on('moveend', () => {  // local dates belong to a place: forget them after a long move
+    if (!S.localVersions) return;
+    const c = S.map.getCenter();
+    if (!S.localCenter) { S.localCenter = c; return; }
+    if (S.map.distance(c, S.localCenter) > 1500) { S.localVersions = null; S.localCenter = null; fillDateSelect('years'); $('#dateLocal').textContent = '📍'; }
+  });
   $('#btnRect').onclick = () => startDraw('rect');
   $('#btnPoly').onclick = () => startDraw('poly');
   $('#btnClear').onclick = () => { S.areaLayer.clearLayers(); $('#areaSelect').value = ''; updateAreaInfo(); };
@@ -579,6 +669,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initMap();
   wire();
   try { await loadSettings(); } catch (e) { console.warn(e); }
+  loadReleaseYears();
   try { await loadAreas(); } catch (e) { console.warn(e); }
   try { await loadRuns(); } catch (e) { console.warn(e); }
   const j = await api('/api/job').catch(() => ({ state: 'idle' }));
