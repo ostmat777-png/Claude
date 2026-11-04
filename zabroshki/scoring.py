@@ -84,35 +84,65 @@ def _clip(x, lo, hi):
     return max(lo, min(hi, x))
 
 
-def _relative(p, neigh):
+def _relative(p, neigh, src=None):
     """How much MORE abandoned the object looks than the buildings around it (logit difference).
     A dacha that looks like all neighbouring dachas gets ~0, whatever the absolute classifier output."""
     v = _logit(p)
     if neigh is None:
         return v - 1.0, " (соседей для сравнения нет — вес снижен)"
+    if src == "region":
+        return v - _logit(neigh), f" (обычные здания такой застройки в регионе {neigh:.2f})"
     return v - _logit(neigh), f" (соседи {neigh:.2f})"
 
 
-def neighbour_context(cands, radius_m=250.0, min_n=6):
-    """Median classifier-A probability of nearby mapped buildings -> f['pA_neigh']."""
+def _ctx_class(f) -> str:
+    if dense_cluster(f):
+        return "dense"
+    if f.get("in_dacha"):
+        return "dacha"
+    return "settlement" if f.get("in_settlement") else "outside"
+
+
+def neighbour_context(cands, radius_m=250.0, min_n=6, min_cover=0.5):
+    """Median classifier-A probability of ordinary mapped buildings nearby -> f['pA_neigh'].
+    * buildings with OSM lifecycle tags are not part of the baseline (ruins of one site must not cancel each other);
+    * if most buildings around have no image score (their tiles were not scanned in the fast mode), the few that
+      have one are a biased sample (often parts of the same site) -> use the regional median of ordinary buildings
+      in the same setting (dense / dacha / settlement / outside) instead, f['pA_neigh_src'] = 'region'."""
     import numpy as np
-    pts = [c for c in cands if c["f"].get("pA") is not None and c.get("footprint") is not None]
+    blds = [c for c in cands if c.get("footprint") is not None and c["kind"] != "complex"]
+    pts = [c for c in blds if c["f"].get("pA") is not None]
     if len(pts) < min_n:
         return
+    tagged = {id(c) for c in blds if osm.lifecycle_strength(c["tags"])[0] > 0}
+    reg: dict = {}
+    for c in pts:
+        if id(c) not in tagged:
+            reg.setdefault(_ctx_class(c["f"]), []).append(c["f"]["pA"])
+    reg = {k: float(np.median(v)) for k, v in reg.items() if len(v) >= 20}
     k = 111320.0 * math.cos(math.radians(pts[0]["lat"]))
     cell = radius_m
     grid: dict = {}
-    for c in pts:
+    for c in blds:
         x, y = c["lon"] * k, c["lat"] * 110574.0
-        grid.setdefault((int(x // cell), int(y // cell)), []).append((x, y, c["f"]["pA"]))
+        p = None if id(c) in tagged else c["f"].get("pA")
+        grid.setdefault((int(x // cell), int(y // cell)), []).append((x, y, p))
     for c in cands:
         if c["f"].get("pA") is None:
             continue
         x, y = c["lon"] * k, c["lat"] * 110574.0
         gx, gy = int(x // cell), int(y // cell)
-        vals = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for (x2, y2, p) in grid.get((gx + dx, gy + dy), ())
+        near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for (x2, y2, p) in grid.get((gx + dx, gy + dy), ())
                 if 0 < (x2 - x) ** 2 + (y2 - y) ** 2 <= radius_m ** 2]
-        c["f"]["pA_neigh"] = round(float(np.median(vals)), 4) if len(vals) >= min_n else None
+        vals = [p for p in near if p is not None]
+        c["f"].pop("pA_neigh_src", None)
+        if len(vals) >= min_n and len(vals) >= min_cover * len(near):
+            c["f"]["pA_neigh"] = round(float(np.median(vals)), 4)
+        elif len(near) >= min_n and _ctx_class(c["f"]) in reg:
+            c["f"]["pA_neigh"] = round(reg[_ctx_class(c["f"])], 4)
+            c["f"]["pA_neigh_src"] = "region"
+        else:
+            c["f"]["pA_neigh"] = None
     # median "trees over the roof" of mapped neighbours: in green dacha areas every roof is partly under trees
     tp = [c for c in cands if c["f"].get("tree_on") is not None and c.get("footprint") is not None]
     grid2: dict = {}
@@ -233,7 +263,7 @@ def feature_vector(c) -> dict:
         x["zs_nobuilding"] = (_clip((f["zs_nobuilding"] - 0.5) / 0.4, 0, 1),
                               f"SigLIP: на снимке z18 скорее нет постройки ({f['zs_nobuilding']:.2f})")
     if f.get("pA") is not None and f.get("pA_trained"):
-        v, txt = _relative(f["pA"], f.get("pA_neigh"))
+        v, txt = _relative(f["pA"], f.get("pA_neigh"), f.get("pA_neigh_src"))
         x["clfA"] = (v, f"Классификатор по снимку z17: {f['pA']:.2f}" + txt)
     # ---- stage B
     if f.get("zs_abandoned") is not None:
@@ -241,7 +271,7 @@ def feature_vector(c) -> dict:
     if f.get("zs_cars") is not None and f["zs_cars"] >= 0.3:
         x["zs_cars"] = (f["zs_cars"], f"SigLIP: машины/техника во дворе {f['zs_cars']:.2f}")
     if f.get("pB") is not None and f.get("pB_trained"):
-        v, txt = _relative(f["pB"], f.get("pA_neigh"))
+        v, txt = _relative(f["pB"], f.get("pA_neigh"), f.get("pA_neigh_src"))
         x["clfB"] = (v, f"Классификатор по снимку z18: {f['pB']:.2f}" + txt)
     # ---- wayback
     if f.get("wb_veg_delta") is not None:

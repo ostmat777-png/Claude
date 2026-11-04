@@ -357,3 +357,28 @@ def test_scanner_plan_skips_dense_and_water():
         sc2.close()
     finally:
         sc.close()
+
+
+def test_neighbour_baseline_falls_back_to_region_when_not_scanned():
+    import random
+    rng = random.Random(1)
+    cands = []
+    # a region of ordinary scanned buildings (low classifier output)
+    for i in range(40):
+        c = _cand(in_settlement=True, pA=0.05 + rng.random() * 0.02)
+        c["lat"], c["lon"] = 60.70 + i * 0.0003, 28.80
+        cands.append(c)
+    # a ruin among 20 buildings, only 3 of them scanned and those are parts of the same site
+    ruin = _cand(in_settlement=True, pA=0.8)
+    ruin["lat"], ruin["lon"] = 60.75, 28.70
+    ruin["tags"] = {"building": "ruins"}
+    cands.append(ruin)
+    for i in range(20):
+        c = _cand(in_settlement=True, **({"pA": 0.75} if i < 3 else {}))
+        c["lat"], c["lon"] = 60.75 + (i % 5) * 0.0003, 28.70 + (i // 5) * 0.0005
+        cands.append(c)
+    scoring.neighbour_context(cands)
+    assert ruin["f"]["pA_neigh_src"] == "region" and ruin["f"]["pA_neigh"] < 0.1
+    # fully scanned neighbourhood: local median, lifecycle-tagged neighbours excluded
+    other = cands[20]
+    assert other["f"].get("pA_neigh_src") is None and other["f"]["pA_neigh"] < 0.1
