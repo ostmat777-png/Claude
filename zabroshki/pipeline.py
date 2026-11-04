@@ -241,8 +241,11 @@ def run_search(job, run_id: int):
             if use_wb:   # collect imagery dates for the likely Wayback set while the z18 check runs
                 import threading
                 from . import wayback as _wb
+                wb_minutes = float(opts.get("wayback_max_minutes_fast", 15) if fast else opts.get("wayback_max_minutes", 40))
+                opts["_wb_deadline"] = time.time() + 60 * wb_minutes   # one budget for the background part + stage
                 wb_thread = threading.Thread(target=_wb.prefetch_versions,
-                                             args=(cands, opts, int(opts.get("scan_zoom", 17)), job.checkpoint),
+                                             args=(cands, opts, int(opts.get("scan_zoom", 17)), job.checkpoint,
+                                                   opts["_wb_deadline"]),
                                              daemon=True)
                 wb_thread.start()
             optional("Точная проверка", stageb.run, job, cands, opts)
@@ -252,11 +255,7 @@ def run_search(job, run_id: int):
         if use_wb:
             from . import wayback
             stage(stage_names[k])
-            if wb_thread is not None and wb_thread.is_alive():
-                job.info("Wayback: дожидаюсь списка дат снимков (собирается в фоне)…")
-                while wb_thread.is_alive():
-                    job.checkpoint()
-                    wb_thread.join(timeout=1.0)
+            # the background date collection is simply continued inside the stage (same cache, same time budget)
             optional("Wayback", wayback.run, job, cands, opts, scan)
             _rescore(cands, weights)
             save_candidates(run_id, cands, stats=stats)

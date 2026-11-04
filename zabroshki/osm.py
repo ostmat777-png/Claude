@@ -427,7 +427,7 @@ def parse(elements) -> OsmData:
             extra = "park"
         elif tags.get("leisure") == "nature_reserve" or tags.get("boundary") == "protected_area":
             extra = "protected"
-        elif tags.get("tourism") in ("museum", "attraction", "zoo", "theme_park", "gallery", "camp_site"):
+        elif tags.get("tourism") in ("museum", "zoo", "theme_park", "gallery"):   # not "attraction": ruins are often one
             extra = "museum"
         if extra and geom() is not None and geom().geom_type in ("Polygon", "MultiPolygon"):
             d.landuse.setdefault(extra, []).append((geom(), tags, oid))

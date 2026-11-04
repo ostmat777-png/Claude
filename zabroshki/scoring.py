@@ -51,7 +51,7 @@ DEFAULT_WEIGHTS = {
     "park": -2.5,
     "museum": -2.5,
     "construction": -2.0,
-    "protected": -1.5,
+    "protected": -0.5,
     "monument": -2.0,
     "cemetery": -1.5,
     "zs_cars": -1.0,
@@ -485,7 +485,7 @@ def confirmation(c) -> tuple[int, list, list]:
             neg.append(f"VLM: похоже, используется ({vlm['abandoned_probability']:.2f})")
         if vlm.get("signs_of_use") is True:
             neg.append("VLM: свежие следы использования")
-    if (f.get("zs_cars") or 0) >= 0.5:
+    if (f.get("zs_cars") or 0) >= 0.5 and lc < 3.0:   # parked cars next to tagged ruins are not a sign of use
         neg.append("на снимке машины/техника")
     if f.get("wb_veg_delta") is not None and f["wb_veg_delta"] <= -0.12 and (f.get("wb_bprob_drop") or 0) < 0.15:
         neg.append("участок расчищен на последних снимках")
@@ -498,7 +498,7 @@ def confirmation(c) -> tuple[int, list, list]:
     if not present and lc == 0 and c["kind"] not in ("deadend", "clearing"):
         neg.append("саму постройку на снимке не видно (под деревьями?) — подтвердить по снимку нельзя")
     for k, txt in (("in_park", "парк/сквер — действующая территория"), ("in_museum", "музей/достопримечательность"),
-                   ("in_protected", "охраняемая природная территория"), ("in_construction", "стройплощадка")):
+                   ("in_construction", "стройплощадка")):
         if f.get(k):
             neg.append(txt)
     if t.get("historic") and t.get("historic") not in ("ruins", "fort", "bunker", "military") and lc < 2.2:
@@ -533,7 +533,7 @@ def never_reason(c, allow=()):
         return "not_building"
     if osm.lifecycle_strength(t)[0] >= 2.2 or "military" in t or f.get("in_military"):
         return None
-    for k in ("park", "museum", "protected", "construction", "cemetery", "garages"):
+    for k in ("park", "museum", "construction", "cemetery", "garages"):
         if f.get("in_" + k):
             return k
     if f.get("in_dacha") and "dacha" not in allow:

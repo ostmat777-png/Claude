@@ -75,6 +75,9 @@ def distinct_versions(z: int, x: int, y: int, max_versions=8) -> list[int]:
     return out
 
 
+_meta_fail = {"n": 0}
+
+
 def capture_date(release: int, lat: float, lon: float, z: int) -> dict:
     """Acquisition date/source from the Wayback metadata service (cached per release and ~1 km cell)."""
     rels = {r["release"]: r for r in releases()}
@@ -90,7 +93,13 @@ def capture_date(release: int, lat: float, lon: float, z: int) -> dict:
                  "&spatialRel=esriSpatialRelIntersects&outFields=SRC_DATE,SRC_DATE2,SRC_DESC,SRC_RES"
                  "&returnGeometry=false&f=json")
             try:
-                d = net.get(q, timeout=15, retries=1).json()
+                if _meta_fail["n"] >= 8:
+                    import time as _t
+                    if _t.time() < _meta_fail.get("until", 0):
+                        raise RuntimeError("metadata server does not answer — release dates are used for 10 min")
+                    _meta_fail["n"] = 0
+                d = net.get(q, timeout=10, retries=0).json()
+                _meta_fail["n"] = 0
                 feats = d.get("features") or []
                 if feats:
                     a = feats[0]["attributes"]
@@ -101,7 +110,12 @@ def capture_date(release: int, lat: float, lon: float, z: int) -> dict:
                     res["src"] = a.get("SRC_DESC")
                     res["res"] = a.get("SRC_RES")
             except Exception as e:
+                _meta_fail["n"] += 1
+                if _meta_fail["n"] == 8:
+                    import time as _t
+                    _meta_fail["until"] = _t.time() + 600
                 log.info("wayback metadata failed: %s", e)
+                return res    # not cached: next time it is asked again
         raw = json.dumps(res).encode()
         db.http_cache_put(key, raw)
     return json.loads(raw)
@@ -176,36 +190,46 @@ def select(cands, opts) -> list:
         group = 1 if tagged else (0 if (pb is None or pb >= 0.5) else 2)
         return group, -c["score"]
     pool.sort(key=pri)
-    return pool[:min(int(opts.get("wayback_top_k", 400)), int(opts.get("wayback_top_k_fast", 250)))]
+    return pool[:min(int(opts.get("wayback_top_k", 400)), int(opts.get("wayback_top_k_fast", 150)))]
 
 
-def prefetch_versions(cands, opts, z, checkpoint=None):
-    """Background warm-up (runs during the z18 check): lists of distinct imagery versions and their capture dates
-    for the likely Wayback selection. Everything lands in the HTTP cache; errors are ignored."""
+progress = {"done": 0, "total": 0}
+
+
+def prefetch_versions(cands, opts, z, checkpoint=None, deadline=None):
+    """Lists of distinct imagery versions and their capture dates for the Wayback selection (runs in the background
+    during the z18 check, and again at the start of the Wayback stage for what is left). Stops at `deadline`
+    (time.time()) or when the server keeps failing. Everything lands in the HTTP cache."""
+    import time as _t
     from concurrent.futures import ThreadPoolExecutor
     try:
         releases()
     except Exception:
-        return
+        return False
     sel = select(cands, opts)
     tl = {}
     for c in sel:
         tl.setdefault(lonlat_to_tile(c["lon"], c["lat"], z), c)
+    progress.update(done=0, total=len(tl))
     fails = [0]
 
     def one(item):
         (x, y), c = item
-        if fails[0] >= 5:
+        if fails[0] >= 5 or (deadline and _t.time() > deadline):
+            progress["done"] += 1
             return
         try:
             if checkpoint:
                 checkpoint()
             for r in distinct_versions(z, x, y)[:8]:
                 capture_date(r, c["lat"], c["lon"], z)
+            fails[0] = 0
         except Exception:
             fails[0] += 1
-    with ThreadPoolExecutor(max_workers=3) as ex:
+        progress["done"] += 1
+    with ThreadPoolExecutor(max_workers=4) as ex:
         list(ex.map(one, list(tl.items())))
+    return fails[0] < 5
 
 
 def run(job, cands, opts, scan):
@@ -214,8 +238,11 @@ def run(job, cands, opts, scan):
     if not sel:
         return
     if opts.get("search_mode", "fast") == "fast":
-        opts = dict(opts, wayback_max_minutes=opts.get("wayback_max_minutes_fast", 25))
+        opts = dict(opts, wayback_max_minutes=opts.get("wayback_max_minutes_fast", 15))
     z = int(opts.get("scan_zoom", 17))
+    import time as _time
+    # one time budget for everything Wayback does, including the background part started during the z18 check
+    t_end = opts.get("_wb_deadline") or (_time.time() + 60 * float(opts.get("wayback_max_minutes", 40)))
     try:
         releases()
     except Exception as e:
@@ -225,28 +252,24 @@ def run(job, cands, opts, scan):
     by_tile: dict = {}
     for c in sel:
         by_tile.setdefault(lonlat_to_tile(c["lon"], c["lat"], z), []).append(c)
-    import time as _time
-    # fetch the list of distinct versions for all tiles in parallel (network-bound, polite rate limit applies)
-    from concurrent.futures import ThreadPoolExecutor
-    pre_fail = [0]
-
-    def _pre(t):
-        if pre_fail[0] >= 5:
-            return
-        try:
-            distinct_versions(z, t[0], t[1])
-        except Exception:
-            pre_fail[0] += 1
-    job.progress(0, len(sel), "Wayback: список дат снимков…")
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        list(ex.map(_pre, list(by_tile)))
-    if pre_fail[0] >= 5:
+    # dates of the imagery versions for all tiles (parallel, polite rate limit, cached; mostly done in background)
+    import threading
+    ok = [True]
+    th = threading.Thread(target=lambda: ok.__setitem__(0, prefetch_versions(cands, opts, z, job.checkpoint, t_end)),
+                          daemon=True)
+    th.start()
+    while th.is_alive():
+        job.checkpoint()
+        job.progress(progress["done"], max(1, progress["total"]),
+                     f"Wayback: даты снимков {progress['done']}/{progress['total']} тайлов, "
+                     f"осталось ≤ {max(0, int((t_end - _time.time()) // 60))} мин")
+        th.join(timeout=1.0)
+    if not ok[0]:
         job.info("Wayback: сервер не отвечает — этап пропущен, поиск продолжается")
         return
     done = 0
     n_changed = 0
     fails = 0
-    t_end = _time.time() + 60 * float(opts.get("wayback_max_minutes", 40))
     for (tx, ty), group in by_tile.items():
         job.checkpoint()
         if _time.time() > t_end:
