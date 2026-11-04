@@ -20,13 +20,69 @@ NEG_CSV = EXAMPLES_DIR / "negatives.csv"   # optional, same format
 
 
 # ------------------------------------------------------------------ examples
+import re  # noqa: E402
+
+_DEC = re.compile(r"-?\d{1,3}[.,]\d{2,}")
+_DMS = re.compile(r"(\d{1,3})\s*[°º]\s*(\d{1,2})?\s*['′’]?\s*(\d{1,2}(?:[.,]\d+)?)?\s*[\"″”]?\s*([NSEWСЮВЗ])", re.I)
+
+
 def _num(s):
     s = str(s).strip().replace(",", ".")
     return float(s)
 
 
-def read_points_csv(path) -> list[dict]:
-    """Robust reader: columns lat/lon (or широта/долгота) + comment; ',' ';' or tab; decimal comma ok."""
+def _find_file(path):
+    """positives.csv, or what Notepad/Excel often makes of it (positives.csv.txt, positives.txt …)."""
+    if path.exists():
+        return path
+    stem = path.stem.lower()
+    if path.parent.exists():
+        for p in sorted(path.parent.iterdir()):
+            n = p.name.lower()
+            if p.is_file() and (n.startswith(stem + ".") or n == stem) and n.endswith((".csv", ".txt", ".tsv")):
+                return p
+    return path
+
+
+def _parse_line(line: str):
+    """(lat, lon, comment) from almost any way of writing coordinates, or None."""
+    t = line.strip().strip("﻿")
+    m = list(_DMS.finditer(t))
+    if len(m) >= 2:
+        vals = {}
+        for g in m[:2]:
+            v = float(g.group(1)) + float(g.group(2) or 0) / 60 + _num(g.group(3) or 0) / 3600
+            h = g.group(4).upper()
+            if h in ("S", "Ю", "W", "З"):
+                v = -v
+            vals["lat" if h in ("N", "S", "С", "Ю") else "lon"] = v
+        if "lat" in vals and "lon" in vals:
+            com = t[m[1].end():].strip(" ,;\t")
+            return vals["lat"], vals["lon"], com
+    nums = list(_DEC.finditer(t))
+    if len(nums) < 2:
+        return None
+    a, b = _num(nums[0].group()), _num(nums[1].group())
+    low = t.lower()
+    if "ll=" in low or "pt=" in low or "yandex" in low:   # Yandex links write lon,lat
+        a, b = b, a
+    if abs(a) > 90 and abs(b) <= 90:
+        a, b = b, a
+    if abs(a) > 90 or abs(b) > 180:
+        return None
+    rest = t[nums[1].end():]
+    if "http" in low:
+        rest = ""
+    com = re.sub(r"^[\s,;\t]+", "", rest).strip().strip('"')
+    return a, b, com
+
+
+def read_points_csv(path, report: list | None = None) -> list[dict]:
+    """Robust reader: one object per line — decimal degrees separated by comma/semicolon/tab/space (decimal point or
+    comma), degrees-minutes-seconds (60°42'44"N 28°44'44"E), links from Google/Yandex maps; optional header
+    (lat/lon, широта/долгота; a header with lon before lat swaps the columns) and comment. Lines that could not be
+    read are added to `report` as (line number, text)."""
+    path = _find_file(path)
     if not path.exists():
         return []
     raw = path.read_bytes()
@@ -36,50 +92,47 @@ def read_points_csv(path) -> list[dict]:
             break
         except UnicodeDecodeError:
             continue
-    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-    if not lines:
-        return []
-    sample = "\n".join(lines[:5])
-    delim = ";" if sample.count(";") > sample.count(",") / 3 and ";" in sample else ("\t" if "\t" in sample else ",")
-    rows = list(csv.reader(io.StringIO("\n".join(lines)), delimiter=delim))
     out = []
-    header = [h.strip().lower() for h in rows[0]]
-
-    def find(names):
-        for i, h in enumerate(header):
-            if any(n == h or h.startswith(n) for n in names):
-                return i
-        return None
-    ilat = find(["lat", "широта", "latitude", "y"])
-    ilon = find(["lon", "lng", "долгота", "longitude", "x"])
-    start = 1
-    if ilat is None or ilon is None:  # no header -> first two numeric columns
-        ilat, ilon, start = 0, 1, 0
-    icom = None
-    for i in range(len(header)):
-        if i not in (ilat, ilon):
-            icom = i
-            break
-    if start == 0:
-        icom = 2
-    for r in rows[start:]:
-        try:
-            lat, lon = _num(r[ilat]), _num(r[ilon])
-        except (ValueError, IndexError):
-            # "60,71","28,75" written with comma decimals and comma delimiter -> 4 fields
-            try:
-                lat, lon = _num(r[0] + "." + r[1]), _num(r[2] + "." + r[3])
-            except Exception:
+    swap = False
+    for i, ln in enumerate(text.splitlines(), start=1):
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        low = s.lower()
+        if not _DEC.search(s) and not _DMS.search(s):
+            hdr = [h.strip() for h in re.split(r"[,;\t]", low)]
+            ilat = next((k for k, h in enumerate(hdr) if h.startswith(("lat", "широта", "y"))), None)
+            ilon = next((k for k, h in enumerate(hdr) if h.startswith(("lon", "lng", "долгота", "x"))), None)
+            if ilat is not None and ilon is not None:
+                swap = ilon < ilat
                 continue
-        if abs(lat) > 90 and abs(lon) <= 90:
+            if report is not None:
+                report.append((i, s[:80]))
+            continue
+        r = _parse_line(s)
+        if r is None:
+            if report is not None:
+                report.append((i, s[:80]))
+            continue
+        lat, lon, com = r
+        if swap and "http" not in low:
             lat, lon = lon, lat
-        com = r[icom].strip() if icom is not None and icom < len(r) else ""
         out.append({"lat": lat, "lon": lon, "comment": com})
     return out
 
 
-def read_positives():
-    return read_points_csv(POS_CSV)
+def read_positives(report=None):
+    return read_points_csv(POS_CSV, report)
+
+
+def user_examples():
+    """Your own examples: positives.csv + map marks 'Заброшка' / negatives.csv + marks 'Не заброшка'."""
+    labels = all_labels()
+    pos = [{"lat": p["lat"], "lon": p["lon"], "comment": p.get("comment") or "пример из файла"} for p in read_positives()]
+    pos += [{"lat": l["lat"], "lon": l["lon"], "comment": l.get("note") or "ваша отметка"} for l in labels if l["label"] == 1]
+    neg = [{"lat": p["lat"], "lon": p["lon"]} for p in read_points_csv(NEG_CSV)]
+    neg += [{"lat": l["lat"], "lon": l["lon"]} for l in labels if l["label"] == 0]
+    return pos, neg
 
 
 # ------------------------------------------------------------------ labels
@@ -144,9 +197,13 @@ def load_meta_weights():
 def model_status():
     from .models import device_info
     labels = all_labels()
+    bad: list = []
     st = {
-        "positives_csv": len(read_positives()),
-        "positives_csv_path": str(POS_CSV),
+        "positives_csv": len(read_positives(bad)),
+        "positives_csv_path": str(_find_file(POS_CSV)),
+        "positives_bad": bad[:8],
+        "positives_bad_n": len(bad),
+        "negatives_csv": len(read_points_csv(NEG_CSV)),
         "labels_pos": sum(1 for l in labels if l["label"] == 1),
         "labels_neg": sum(1 for l in labels if l["label"] == 0),
         "labels_since_train": labels_since_train(),
@@ -154,7 +211,7 @@ def model_status():
         "models": {},
     }
     for name, title in (("clfA", "Классификатор A (z17, DINOv2)"), ("clfB", "Классификатор B (z18, SigLIP)"),
-                        ("meta_weights", "Веса признаков")):
+                        ("clfU", "Похоже на ваши примеры"), ("meta_weights", "Веса признаков")):
         meta = _model_meta(name)
         if meta:
             desc = meta.get("desc") or ""
@@ -306,6 +363,13 @@ def train_and_score_A(job, cands, opts, scan):
                               "provider": scan.provider, "z": scan.z})
     job.info("Классификатор A: " + desc)
     _score_A(cands, clf, scan)
+    try:
+        train_and_score_U(job, cands, opts, scan)
+    except Exception as e:  # optional
+        from .jobs import Cancelled
+        if isinstance(e, Cancelled):
+            raise
+        log.exception("classifier U")
 
 
 def _score_A(cands, clf, scan):
@@ -321,6 +385,122 @@ def _score_A(cands, clf, scan):
     for c, v in zip(keys, p):
         c["f"]["pA"] = round(float(v), 4)
         c["f"]["pA_trained"] = True
+
+
+# ------------------------------------------------------------------ "similar to your examples"
+def example_settings(cands, pos=None) -> set:
+    """Settings ('dacha', 'dense', …) of the candidates your positive examples point at."""
+    pos = user_examples()[0] if pos is None else pos
+    out = set()
+    if not pos:
+        return out
+    grid: dict = {}
+    for c in cands:
+        grid.setdefault((round(c["lat"], 3), round(c["lon"], 3)), []).append(c)
+    for p in pos:
+        best, bd = None, 40.0
+        for dl in (-0.001, 0, 0.001):
+            for dn in (-0.001, 0, 0.001):
+                for c in grid.get((round(p["lat"] + dl, 3), round(p["lon"] + dn, 3)), ()):
+                    d = math.hypot((c["lat"] - p["lat"]) * 110574, (c["lon"] - p["lon"]) * 55660)
+                    if d < bd and c["kind"] not in ("deadend", "clearing", "complex"):
+                        best, bd = c, d
+        if best is not None:
+            f = best["f"]
+            if f.get("in_dacha"):
+                out.add("dacha")
+            if scoring.dense_cluster(f):
+                out.add("dense")
+    return out
+
+
+def train_and_score_U(job, cands, opts, scan):
+    """Classifier U: ONLY your examples (positives.csv + marks 'Заброшка') against ordinary buildings and your
+    'Не заброшка' — no OSM-tagged ruins, which otherwise outnumber your 20 examples 10:1. Gives f['pU']."""
+    from .imagery import embed_points_A
+    for c in cands:
+        c["f"].pop("pU", None)
+    pos, _ = user_examples()
+    if len(pos) < 3:
+        return None
+    o = dict(opts, use_osm_weak_positives=False, negatives_per_positive=10, min_negatives=150)
+    pts, n_real = build_training_points(cands, o, neg_ok=lambda c: scan.embedding(c) is not None)
+    embs = embed_points_A([(p[0], p[1]) for p in pts], scan.provider, scan.z, job)
+    keep = [i for i, e in enumerate(embs) if e is not None]
+    y = np.array([pts[i][2] for i in keep])
+    if y.sum() < 3 or (len(y) - y.sum()) < 10:
+        return None
+    X = np.stack([embs[i] for i in keep])
+    w = np.array([pts[i][3] for i in keep])
+    met = _cv_metrics(X, y, w, [pts[i][4] for i in keep])
+    clf = _fit(X, y, w)
+    desc = f"ваших примеров {int(y.sum())}, обычных зданий {int(len(y) - y.sum())}" + \
+        (f", CV AUC {met['auc']}" if met else "")
+    _save_model("clfU", clf, {"desc": desc, "metrics": met})
+    job.info("Модель «похоже на ваши примеры»: " + desc)
+    rows = [(c, scan.embedding(c)) for c in cands]
+    rows = [(c, e) for c, e in rows if e is not None]
+    if rows:
+        p = clf.predict_proba(np.stack([e for _, e in rows]))[:, 1]
+        for (c, _), v in zip(rows, p):
+            c["f"]["pU"] = round(float(v), 4)
+    return clf
+
+
+def mark_similar(cands, opts=None) -> int:
+    """f['similar'] for the best candidates "like your examples" (shown by default with '≈', for you to check).
+    Ranking: how much the object stands out from the buildings around it BOTH by similarity to your examples
+    (classifier U) AND by the general abandonment classifier A. Similarity alone mostly finds "a big city building
+    like yours" (tested on Vyborg: 5 of 40 real abandoned objects; with the relative pair: 19 of 40).
+    Skipped: objects already shown as reliable, your own examples, places you marked 'Не заброшка', parks/museums/
+    construction sites…, dachas and dense blocks unless your examples are there too."""
+    from .config import settings
+    opts = opts or settings().data
+    for c in cands:
+        c["f"].pop("similar", None)
+    pos, neg = user_examples()
+    if len(pos) < 3:
+        return 0
+    allow = example_settings(cands, pos)
+    k = int(opts.get("similar_top_k", 40))
+    thr = float(opts.get("similar_min", 0.5))
+    blds = [c for c in cands if c["f"].get("pU") is not None and c["kind"] not in ("deadend", "clearing", "complex")]
+    if not blds:
+        return 0
+    L = scoring._logit
+    reg: dict = {}
+    for c in blds:
+        reg.setdefault(scoring._ctx_class(c["f"]), []).append(c["f"]["pU"])
+    reg = {kk: float(np.median(v)) for kk, v in reg.items()}
+    kx = 111320.0 * math.cos(math.radians(blds[0]["lat"]))
+    grid: dict = {}
+    for c in blds:
+        grid.setdefault((int(c["lon"] * kx // 250), int(c["lat"] * 110574 // 250)), []).append(c)
+    pool = []
+    for c in blds:
+        f = c["f"]
+        if f["pU"] < thr or f.get("reliable") or scoring.never_reason(c, allow) is not None:
+            continue
+        # must be checked on the image and contradiction-free: building visible, no cars, not cleared …
+        if not f.get("img_valid") or f.get("contra") or (f.get("bprob") is not None and f["bprob"] < 0.3) \
+                or (f.get("zs_cars") or 0) >= 0.5:
+            continue
+        if _near(c["lat"], c["lon"], pos, 40) is not None or _near(c["lat"], c["lon"], neg, 40) is not None:
+            continue
+        x, y = c["lon"] * kx, c["lat"] * 110574
+        gx, gy = int(x // 250), int(y // 250)
+        v = [o["f"]["pU"] for dx in (-1, 0, 1) for dy in (-1, 0, 1) for o in grid.get((gx + dx, gy + dy), ())
+             if o is not c and (o["lon"] * kx - x) ** 2 + (o["lat"] * 110574 - y) ** 2 <= 250 ** 2]
+        un = float(np.median(v)) if len(v) >= 6 else reg.get(scoring._ctx_class(f), 0.05)
+        pa = f.get("pA") if f.get("pA_trained") else None
+        rel_a = (L(pa) - L(f.get("pA_neigh") or 0.05)) if pa is not None else 0.0
+        rank = (L(f["pU"]) - L(un)) + rel_a
+        if rank > 0:
+            pool.append((rank, c))
+    pool.sort(key=lambda t: -t[0])
+    for _, c in pool[:k]:
+        c["f"]["similar"] = c["f"]["pU"]
+    return min(k, len(pool))
 
 
 def train_B(job, cands, opts, embed_fn):
@@ -375,6 +555,7 @@ def retrain(job, pool, opts):
                 return self.store.get(self.key(c))
         try:
             s = _S()
+            _embed_like_examples(job, pool, opts, s)
             if any(s.embedding(c) is not None for c in pool):
                 train_and_score_A(job, pool, opts, s)
             from . import stageb
@@ -384,6 +565,36 @@ def retrain(job, pool, opts):
             job.info(f"Дообучение классификаторов не удалось: {e}")
     else:
         job.info("PyTorch недоступен — переобучаются только веса признаков")
+
+
+def _embed_like_examples(job, pool, opts, s):
+    """Fast-mode runs have no image embeddings for dachas / dense blocks. If your examples are there, fetch the
+    missing ones (capped) so 'similar to your examples' can look there too."""
+    pos, _ = user_examples()
+    if len(pos) < 3:
+        return
+    allow = example_settings(pool, pos)
+    if not allow:
+        return
+    from .geo import lonlat_to_tile
+    from .imagery import embed_points_A
+    miss = [c for c in pool if c.get("footprint") is not None and s.embedding(c) is None
+            and c["kind"] not in ("deadend", "clearing", "complex") and scoring.never_reason(c, allow) is None]
+    if not miss:
+        return
+    cap = int(opts.get("retrain_embed_tiles", 3000))
+    tiles_seen: set = set()
+    take = []
+    for c in sorted(miss, key=lambda c: -c["score"]):
+        t = lonlat_to_tile(c["lon"], c["lat"], s.z)
+        if t not in tiles_seen and len(tiles_seen) >= cap:
+            continue
+        tiles_seen.add(t)
+        take.append(c)
+    job.info(f"Ваши примеры есть в местах, которые быстрый поиск пропускал ({', '.join(sorted(allow))}) — "
+             f"докачиваю снимки для {len(take)} построек ({len(tiles_seen)} тайлов)")
+    embed_points_A([(c["lat"], c["lon"]) for c in take], s.provider, s.z, job)
+    s.store = db.emb_get_many([s.key(c) for c in pool])
 
 
 def fit_meta_weights(job, pool):

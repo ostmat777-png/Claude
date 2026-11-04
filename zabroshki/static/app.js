@@ -319,7 +319,7 @@ async function selectRun(id, fit) {
 async function loadCandidates() {
   if (!S.runId) return;
   const data = await api(`/api/runs/${S.runId}/candidates`);
-  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7], conf: a[8] || 0, rel: !!a[9], part: !!a[10] }));
+  S.cands = data.items.map((a) => ({ id: a[0], lat: a[1], lon: a[2], score: a[3], guard: a[4], type: a[5], title: a[6], label: a[7], conf: a[8] || 0, rel: !!a[9], part: !!a[10], sim: a[11] || 0 }));
   loadComplexes();
   buildTypeChecks();
   renderCandidates();
@@ -340,11 +340,13 @@ function buildTypeChecks() {
 function passes(c) {
   const f = S.filters;
   if (!f.guard[c.guard]) return false;
-  if (c.score < f.minScore) return false;
+  const mine = c.label === 1;
+  if (c.score < f.minScore && !mine && !c.sim) return false;
   if (f.types[c.type] === false) return false;
   if (f.onlyUnlabeled && c.label != null) return false;
-  if (f.onlyReliable && !c.rel) return false;
-  if (!f.showParts && c.part) return false;
+  if (f.onlyReliable && c.label === 0) return false;
+  if (f.onlyReliable && !c.rel && !c.sim && !mine) return false;
+  if (!f.showParts && c.part && !c.sim && !mine) return false;
   return true;
 }
 
@@ -361,17 +363,21 @@ function renderCandidates() {
   shown.sort((a, b) => a.score - b.score); // draw best on top
   for (const c of shown) {
     const m = L.circleMarker([c.lat, c.lon], {
-      radius: 4 + 7 * c.score, color: c.label === 1 ? '#000' : (c.label === 0 ? '#7a7a7a' : (c.conf >= 2 ? '#00e5ff' : '#fff')),
-      weight: c.label != null || c.conf >= 2 ? 3 : 1.5, fillColor: COLORS[c.guard] || COLORS.yellow, fillOpacity: 0.9,
+      radius: c.sim && !c.rel ? 8 : 4 + 7 * c.score,
+      color: c.label === 1 ? '#000' : (c.label === 0 ? '#7a7a7a' : (c.sim && !c.rel ? '#c77dff' : (c.conf >= 2 ? '#00e5ff' : '#fff'))),
+      weight: c.label != null || c.conf >= 2 || c.sim ? 3 : 1.5, dashArray: c.sim && !c.rel && c.label == null ? '3 3' : null,
+      fillColor: COLORS[c.guard] || COLORS.yellow, fillOpacity: 0.9,
     });
-    m.bindTooltip(`${(c.score * 100).toFixed(0)} · ${esc(TYPE_NAMES[c.type] || c.type)}<br>${esc(c.title || '')}`, { direction: 'top' });
+    m.bindTooltip(`${(c.score * 100).toFixed(0)} · ${esc(TYPE_NAMES[c.type] || c.type)}<br>${esc(c.title || '')}`
+      + (c.sim ? `<br>≈ похоже на ваши примеры (${(c.sim * 100).toFixed(0)}%)` : ''), { direction: 'top' });
     m.on('click', () => selectCandidate(c.id));
     m.addTo(S.markers);
     S.markerById.set(c.id, m);
   }
   ['red', 'yellow', 'green'].forEach((g) => { $('#cnt-' + g).textContent = cnt[g] || 0; });
   const nrel = S.cands.filter((c) => c.rel && !c.part).length;
-  $('#shownCount').textContent = `показано ${shown.length} · надёжных ${nrel} · всего ${S.cands.length}`;
+  const nsim = S.cands.filter((c) => c.sim).length;
+  $('#shownCount').textContent = `показано ${shown.length} · надёжных ${nrel}` + (nsim ? ` · ≈ похожих на ваши ${nsim}` : '') + ` · всего ${S.cands.length}`;
   drawComplexes(shown);
   const list = shown.slice().reverse().slice(0, 400);
   $('#list').innerHTML = list.map((c) => `
@@ -379,7 +385,8 @@ function renderCandidates() {
       <span class="dot ${c.guard}"></span>
       <span class="sc">${(c.score * 100).toFixed(0)}${c.conf >= 2 ? '<span class="conf" title="подтверждено ' + c.conf + ' источниками">✔' + c.conf + '</span>' : ''}</span>
       <span class="tt">${esc(TYPE_NAMES[c.type] || c.type)} · <span class="muted">${esc(c.title || '')}</span>
-        ${c.label === 1 ? '<span class="lb">✔ заброшка</span>' : c.label === 0 ? '<span class="lb">✘ не заброшка</span>' : ''}</span>
+        ${c.label === 1 ? '<span class="lb">✔ заброшка</span>' : c.label === 0 ? '<span class="lb">✘ не заброшка</span>' : ''}
+        ${c.sim && c.label == null ? '<span class="lb simlb" title="Похоже на ваши примеры — проверьте и отметьте">≈ похоже</span>' : ''}</span>
     </div>`).join('') + (shown.length > 400 ? `<div class="muted" style="padding:6px">… и ещё ${shown.length - 400} (уточните фильтры)</div>` : '');
   $$('#list .item').forEach((el) => el.addEventListener('click', () => selectCandidate(+el.dataset.id, true)));
 }
@@ -432,6 +439,16 @@ async function loadManual() {
     });
     m.addTo(S.manualLayer);
   }
+  let ex = { positives: [], negatives: [] };
+  try { ex = await api('/api/examples'); } catch (e) { return; }
+  for (const [list, yes] of [[ex.positives, true], [ex.negatives, false]]) {
+    for (const p of list) {
+      const icon = L.divIcon({ className: 'manual-mark file ' + (yes ? 'yes' : 'no'), html: yes ? '☆' : '✕', iconSize: [20, 20] });
+      L.marker([p.lat, p.lon], { icon, title: (yes ? 'Пример из positives.csv' : 'Не заброшка из negatives.csv') + (p.comment ? ': ' + p.comment : '') })
+        .bindPopup(`${yes ? '☆ Пример из файла positives.csv' : '✕ Из файла negatives.csv'}<br>${esc(p.comment || '')}<br><span class="muted small">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</span>`)
+        .addTo(S.manualLayer);
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ detail */
@@ -476,7 +493,9 @@ function renderDetail(d) {
       <div><span class="scorebig">${(d.score * 100).toFixed(0)}</span><span class="muted"> / 100 балл заброшенности</span></div>
       <span class="badge ${d.guard}">${GUARD_NAMES[d.guard] || d.guard}</span>
     </div>
-    ${d.reliable ? '<div class="relbadge">✔ Надёжная метка</div>' : '<div class="muted small">Ненадёжная метка — показывается только при снятой галочке «только надёжные»</div>'}
+    ${d.reliable ? '<div class="relbadge">✔ Надёжная метка</div>' : (d.similar ? '' : '<div class="muted small">Ненадёжная метка — показывается только при снятой галочке «только надёжные»</div>')}
+    ${d.similar ? `<div class="simbadge">≈ Похоже на ваши примеры (${(d.similar * 100).toFixed(0)}%) — проверьте по снимку и нажмите «Заброшка» или «Не заброшка»: программа учится на этом</div>`
+      : (d.pU != null ? `<div class="muted small">Сходство с вашими примерами: ${(d.pU * 100).toFixed(0)}%</div>` : '')}
     ${(d.members || []).length ? `<h4>Здания территории (${d.members.length})</h4><div class="members">${d.members.map((m) =>
       `<div class="item" data-mid="${m.id}"><span class="dot ${m.guard}"></span><span class="sc">${(m.score * 100).toFixed(0)}${m.reliable ? '<span class="conf">✔</span>' : ''}</span><span class="tt">${esc(TYPE_NAMES[m.kind] || m.kind)} · <span class="muted">${esc(m.title || '')}</span></span></div>`).join('')}</div>` : ''}
     <div class="labelbtns">
@@ -626,7 +645,11 @@ async function loadModelInfo() {
     const m = await api('/api/model');
     S.labelsSinceTrain = m.labels_since_train;
     const lines = [
-      `<b>Примеры:</b> ${m.positives_csv} из examples/positives.csv` + (m.positives_csv_path ? ` <span class="small">(${esc(m.positives_csv_path)})</span>` : ''),
+      `<b>Примеры:</b> ${m.positives_csv} из файла` + (m.positives_csv_path ? ` <span class="small">(${esc(m.positives_csv_path)})</span>` : '')
+        + (m.negatives_csv ? ` · не заброшек из negatives.csv: ${m.negatives_csv}` : '')
+        + (m.positives_bad_n ? `<div class="warn">Не распознано строк: ${m.positives_bad_n}. Нужны широта и долгота (лучше 5 знаков после точки), например «60.71234, 28.74567».<br>`
+          + m.positives_bad.map((b) => `строка ${b[0]}: «${esc(b[1])}»`).join('<br>') + '</div>' : '')
+        + (!m.positives_csv && !m.positives_bad_n ? `<div class="warn">Файл пуст или не найден. Проверьте, что он называется positives.csv и лежит в папке examples программы (путь выше).</div>` : ''),
       `<b>Отметки:</b> заброшка ${m.labels_pos}, не заброшка ${m.labels_neg}` + (m.labels_since_train ? ` · новых с последнего обучения: ${m.labels_since_train}` : ''),
       `<b>Устройство:</b> ${esc(m.device || '')}`,
     ];

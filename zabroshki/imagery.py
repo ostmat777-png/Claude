@@ -237,13 +237,19 @@ class Scanner:
         reached even 0.5, every reliable mark is a mapped building, so empty forest/field tiles, open water and
         blocks of dachas/dense houses without OSM tags give nothing in this mode. Full mode: everything except open
         water without buildings."""
-        from .scoring import never_reliable
+        from .scoring import never_reason
+        try:
+            from .training import example_settings
+            allow = example_settings(cands)     # e.g. your examples are dachas -> dachas are searched too
+        except Exception:
+            allow = set()
+        self.stats["example_settings"] = sorted(allow)
         by_tile: dict = {}
         for c in cands:
             px, py = lonlat_to_pixel(c["lon"], c["lat"], self.z)
             by_tile.setdefault((int(px // TILE), int(py // TILE)), []).append(c)
         if self.opts.get("search_mode", "fast") == "fast":
-            need = {t for t, cl in by_tile.items() if not all(never_reliable(c) for c in cl)}
+            need = {t for t, cl in by_tile.items() if any(never_reason(c, allow) is None for c in cl)}
             skip = set(self.tiles) - need
             self.stats["dense_tiles_skipped"] = sum(1 for t, cl in by_tile.items() if t not in need)
             self.stats["empty_tiles_skipped"] = sum(1 for t in self.tiles if t not in by_tile)

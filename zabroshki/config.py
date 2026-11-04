@@ -69,7 +69,10 @@ DEFAULTS: dict = {
     "wayback_top_k": 400,     # candidates that get the year-by-year comparison
     "wayback_max_minutes": 40,  # time budget of the Wayback stage (skipped/cut if the server is slow)
     "wayback_top_k_fast": 250,
-    "retrain_new_crops": 300,  # "Дообучить": z18 crops for candidates that became promising
+    "retrain_new_crops": 300,
+    "similar_min": 0.5,       # "похоже на ваши примеры": classifier U threshold …
+    "similar_top_k": 25,      # … and at most this many on the map
+    "retrain_embed_tiles": 3000,  # "Дообучить": max z17 tiles to fetch for places like your examples  # "Дообучить": z18 crops for candidates that became promising
     "wayback_max_minutes_fast": 25,
     "vlm_top_k": 150,
     "min_score_keep": 0.05,   # recall first: almost everything is kept

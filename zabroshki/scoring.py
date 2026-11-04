@@ -512,19 +512,42 @@ NOT_BUILDINGS = {"castle_wall", "wall", "city_wall", "roof", "carport", "bridge"
                  "ship", "train_station_roof"}
 
 
+NEVER_TEXT = {
+    "kind": "тупик дороги / прогалина — не постройка",
+    "not_building": "не здание (стена, навес, крыша над платформой …)",
+    "dacha": "в садоводстве (дачи) без тега заброшенности OSM",
+    "dense": "в плотной застройке без тега заброшенности OSM",
+    "garages": "гаражи",
+    "park": "в парке", "museum": "на территории музея/достопримечательности",
+    "protected": "в заповеднике/ООПТ", "construction": "на стройплощадке", "cemetery": "на кладбище",
+}
+
+
+def never_reason(c, allow=()):
+    """Why the candidate can never become a reliable mark (key of NEVER_TEXT), or None. `allow`: settings
+    ('dacha', 'dense') where you gave your own examples — they are searched there too."""
+    f, t = c["f"], c["tags"]
+    if c["kind"] in ("deadend", "clearing"):
+        return "kind"
+    if t.get("building") in NOT_BUILDINGS and t.get("building") != "ruins":
+        return "not_building"
+    if osm.lifecycle_strength(t)[0] >= 2.2 or "military" in t or f.get("in_military"):
+        return None
+    for k in ("park", "museum", "protected", "construction", "cemetery", "garages"):
+        if f.get("in_" + k):
+            return k
+    if f.get("in_dacha") and "dacha" not in allow:
+        return "dacha"
+    if dense_cluster(f) and "dense" not in allow:
+        return "dense"
+    return None
+
+
 def never_reliable(c) -> bool:
     """Can never become a reliable mark whatever the imagery shows (see reliable()). The fast search mode does not
     spend downloads on such candidates: dachas, garages and dense settlements without an OSM tag, parks, museums,
     protected areas, construction sites, cemeteries, road dead ends and clearings."""
-    f, t = c["f"], c["tags"]
-    if c["kind"] in ("deadend", "clearing"):
-        return True
-    if t.get("building") in NOT_BUILDINGS and t.get("building") != "ruins":
-        return True   # walls, roofs over platforms, carports … have no roof to collapse
-    if osm.lifecycle_strength(t)[0] >= 2.2 or "military" in t or f.get("in_military"):
-        return False
-    return bool(f.get("in_dacha") or dense_cluster(f) or f.get("in_garages") or f.get("in_park")
-                or f.get("in_museum") or f.get("in_protected") or f.get("in_construction") or f.get("in_cemetery"))
+    return never_reason(c) is not None
 
 
 def promising(c, pa_min=0.5) -> bool:

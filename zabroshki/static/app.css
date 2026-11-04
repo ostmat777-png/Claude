@@ -149,3 +149,7 @@ h4 { margin: 10px 0 2px; }
 .manual-mark.yes { color: #ffd84d; }
 .manual-mark.no { color: #bbb; }
 .mm button { margin: 4px 2px; }
+
+.simbadge { color: #c77dff; font-weight: 600; margin: 2px 0 4px; }
+.lb.simlb { color: #c77dff; }
+.warn { color: #ffb347; font-size: 12px; margin-top: 3px; }

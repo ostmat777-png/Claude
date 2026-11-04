@@ -34,16 +34,32 @@ def compact_candidates(run_id: int, min_score: float = 0.0):
     keep = max(min_score, settings().get("min_score_keep", 0.03))
     rows = db.app_con().execute(
         "SELECT id, lat, lon, score, guard, kind, title, json_extract(features, '$.confirm_n') AS cn, "
-        "json_extract(features, '$.reliable') AS rel, json_extract(features, '$.complex_key') AS ck "
-        "FROM candidates WHERE run_id=? AND score>=? ORDER BY score DESC",
+        "json_extract(features, '$.reliable') AS rel, json_extract(features, '$.complex_key') AS ck, "
+        "json_extract(features, '$.similar') AS sim "
+        "FROM candidates WHERE run_id=? AND (score>=? OR json_extract(features, '$.similar') IS NOT NULL) "
+        "ORDER BY score DESC",
         (run_id, keep)).fetchall()
     grid = label_index()
+    # objects you marked are always sent, whatever their score
+    seen = {r["id"] for r in rows}
+    extra = []
+    for lb in db.app_con().execute("SELECT lat, lon FROM labels").fetchall():
+        d = 0.0003
+        for r in db.app_con().execute(
+                "SELECT id, lat, lon, score, guard, kind, title, json_extract(features, '$.confirm_n') AS cn, "
+                "json_extract(features, '$.reliable') AS rel, json_extract(features, '$.complex_key') AS ck, "
+                "json_extract(features, '$.similar') AS sim FROM candidates WHERE run_id=? AND kind!='complex' "
+                "AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?",
+                (run_id, lb["lat"] - d, lb["lat"] + d, lb["lon"] - 2 * d, lb["lon"] + 2 * d)).fetchall():
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                extra.append(r)
     items = []
-    for r in rows:
+    for r in list(rows) + extra:
         lb = find_label(grid, r["lat"], r["lon"]) if grid else None
         items.append([r["id"], round(r["lat"], 6), round(r["lon"], 6), round(r["score"], 4), r["guard"], r["kind"],
                       r["title"] or "", lb["label"] if lb else None, r["cn"] or 0, 1 if r["rel"] else 0,
-                      1 if r["ck"] else 0])
+                      1 if r["ck"] else 0, round(r["sim"], 3) if r["sim"] else 0])
     return {"run_id": run_id, "items": items}
 
 
@@ -85,6 +101,7 @@ def candidate_detail(cid: int):
         "google_maps": google_maps_url(r["lat"], r["lon"]), "osm_url": osm_url(r["lat"], r["lon"]),
         "features": {k: v for k, v in f.items() if not isinstance(v, (dict, list)) or k in ("gates", "landuse")},
         "reliable": bool(f.get("reliable")), "members": _members(r["run_id"], f.get("members") or []),
+        "similar": f.get("similar"), "pU": f.get("pU"),
         "footprint": db.loads(r["footprint"]),
     }
 

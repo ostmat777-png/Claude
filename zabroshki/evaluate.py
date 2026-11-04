@@ -24,6 +24,30 @@ def _dist(a, b):
     return math.hypot((a["lat"] - b["lat"]) * 110574, (a["lon"] - b["lon"]) * 111320 * math.cos(math.radians(a["lat"])))
 
 
+def why_hidden(c, allow=()):
+    """Plain-language answer to "why is this object not on the map in the default view"."""
+    f = c["f"]
+    if f.get("reliable"):
+        return "показан: надёжная метка"
+    if f.get("similar"):
+        return "показан: ≈ похоже на ваши примеры"
+    out = []
+    r = scoring.never_reason(c, allow)
+    if r:
+        out.append(scoring.NEVER_TEXT[r])
+    if f.get("contra"):
+        out.append("противоречие: " + f["contra"][0])
+    if c["score"] < 0.5:
+        out.append(f"балл {c['score']:.2f} < 0,50")
+    if f.get("pA") is None and c["kind"] not in ("deadend", "clearing"):
+        out.append("снимок здесь не сканировался (быстрый режим)")
+    elif osm.lifecycle_strength(c["tags"])[0] < 2.2 and not scoring.strong_evidence(c):
+        out.append("нет тега OSM и сильного признака на снимке")
+    if f.get("pU") is not None:
+        out.append(f"сходство с вашими примерами {f['pU']:.2f}")
+    return "скрыт: " + ("; ".join(out) or "не прошёл правило надёжной метки")
+
+
 def _strip_osm(c):
     """Copy of a candidate without OSM lifecycle evidence (as if the object were not tagged)."""
     c2 = copy.deepcopy(c)
@@ -192,18 +216,22 @@ def main(run_id=None, quiet=False):
         for k, v in pres.items():
             lines.append(f"| {k} | {v} |")
         lines.append("")
-        lines.append("| # | координаты | комментарий | в области | найден | балл | место | цвет | главные причины |")
-        lines.append("|---|---|---|---|---|---|---|---|---|")
+        lines.append("| # | координаты | комментарий | в области | найден | балл | место | цвет | на карте? | главные причины |")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
+        from .training import example_settings
+        allow = example_settings(cands)
         order = sorted(range(len(cands)), key=lambda i: -cands[i]["score"])
         rank = {order[k]: k + 1 for k in range(len(order))}
         for j, (p, inside, best, d) in enumerate(prow, 1):
             if best is None:
-                lines.append(f"| {j} | {p['lat']:.5f}, {p['lon']:.5f} | {p['comment']} | {'да' if inside else 'нет'} | нет | — | — | — | — |")
+                why = ("нет ни в OSM, ни в контурах Microsoft — такие постройки ищутся только в режиме поиска «полный»"
+                       if inside else "вне области поиска")
+                lines.append(f"| {j} | {p['lat']:.5f}, {p['lon']:.5f} | {p['comment']} | {'да' if inside else 'нет'} | нет | — | — | — | {why} | — |")
             else:
                 c = cands[best]
                 rs = "; ".join(r["text"] for r in sorted(scoring.score(c, weights)[1], key=lambda r: -r["w"])[:3])
                 lines.append(f"| {j} | {p['lat']:.5f}, {p['lon']:.5f} | {p['comment']} | {'да' if inside else 'нет'} | "
-                             f"да ({d:.0f} м) | {c['score']:.2f} | {rank[best]} | {c['guard']} | {rs} |")
+                             f"да ({d:.0f} м) | {c['score']:.2f} | {rank[best]} | {c['guard']} | {why_hidden(c, allow)} | {rs} |")
     lines.append("")
     res, detail = proxy_eval(cands, weights)
     lines.append("## Слепой тест на объектах OSM с тегами заброшенности")

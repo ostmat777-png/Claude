@@ -273,6 +273,7 @@ def run_search(job, run_id: int):
         if n_abs:
             job.info(f"Объединено мелких точек с соседними зданиями: {n_abs} (одна метка на объект)")
         _rescore(cands, weights)
+        _mark_similar(cands, opts, job)
         _add_complexes(cands, lp, job)
         keep = opts.get("min_score_keep", 0.03)
         stats["candidates"] = len(cands)
@@ -282,6 +283,7 @@ def run_search(job, run_id: int):
         stats["yellow"] = sum(1 for c in cands if c["score"] >= keep and c["guard"] == "yellow")
         stats["confirmed"] = sum(1 for c in cands if c["score"] >= keep and (c["f"].get("confirm_n") or 0) >= 2)
         stats["reliable"] = sum(1 for c in cands if c["f"].get("reliable") and not c["f"].get("complex_key"))
+        stats["similar"] = sum(1 for c in cands if c["f"].get("similar"))
         tm = job.timings()
         stats["timings"] = [(n_, round(t_)) for n_, t_ in tm]
         stats["total_s"] = round(time.time() - t_start)
@@ -326,6 +328,16 @@ def _add_complexes(cands, lp, job=None):
         job.info(f"Территорий (комплексов) выделено: {len(cx)} — одна метка и контур на весь объект")
 
 
+def _mark_similar(cands, opts, job=None):
+    try:
+        from .training import mark_similar
+        n = mark_similar(cands, opts)
+        if n and job:
+            job.info(f"Похоже на ваши примеры: {n} объектов (≈ на карте) — проверьте и отметьте «Заброшка»/«Не заброшка»")
+    except Exception:
+        log.exception("mark_similar")
+
+
 def run_retrain(job, run_id=None):
     """Retrain classifiers (examples + labels), re-weight the evidence and re-rank the run(s)."""
     from . import training
@@ -348,6 +360,7 @@ def run_retrain(job, run_id=None):
             _rescore(cs, weights)
             C.absorb_satellites(cs, lpx)
             _rescore(cs, weights)
+            _mark_similar(cs, _opts({}), job)
             _add_complexes(cs, lpx, job)
         except Exception:
             log.exception("absorb_satellites / complexes")

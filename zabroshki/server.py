@@ -316,6 +316,13 @@ def list_labels():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/examples")
+def list_examples():
+    """Examples from examples/positives.csv and negatives.csv (shown on the map as ☆ / ✕ outlines)."""
+    from .training import NEG_CSV, read_points_csv, read_positives
+    return {"positives": read_positives(), "negatives": read_points_csv(NEG_CSV)}
+
+
 @app.post("/api/retrain")
 def retrain(payload: dict = Body(default={})):
     from . import pipeline

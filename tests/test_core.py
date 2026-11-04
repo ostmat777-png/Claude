@@ -382,3 +382,25 @@ def test_neighbour_baseline_falls_back_to_region_when_not_scanned():
     # fully scanned neighbourhood: local median, lifecycle-tagged neighbours excluded
     other = cands[20]
     assert other["f"].get("pA_neigh_src") is None and other["f"]["pA_neigh"] < 0.1
+
+
+def test_examples_any_format(tmp_path):
+    p = tmp_path / "positives.csv.txt"     # what Notepad makes of positives.csv
+    p.write_text("lat,lon,comment\n"
+                 "60.71234 28.74567 завод через пробел\n"
+                 "60°42'44.4\"N 28°44'44.4\"E склад\n"
+                 "https://www.google.com/maps/@60.7123456,28.7456789,17z\n"
+                 "https://yandex.ru/maps/?ll=28.745678%2C60.712345&z=17\n"
+                 "тут нет координат\n", encoding="utf-8")
+    bad = []
+    r = read_points_csv(tmp_path / "positives.csv", bad)
+    assert len(r) == 4 and all(abs(x["lat"] - 60.7123) < 0.001 and abs(x["lon"] - 28.7457) < 0.001 for x in r)
+    assert r[0]["comment"] == "завод через пробел" and r[1]["comment"] == "склад"
+    assert bad == [(6, "тут нет координат")]
+
+
+def test_never_reason_allows_your_settings():
+    d = _cand(in_dacha=True)
+    assert scoring.never_reason(d) == "dacha" and scoring.never_reason(d, {"dacha"}) is None
+    p = _cand(in_park=True)
+    assert scoring.never_reason(p, {"dacha", "dense"}) == "park"
