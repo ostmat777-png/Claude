@@ -1,0 +1,5 @@
+# Нужен только для установки с компьютера (npx wrangler deploy).
+# С телефона воркер ставится через сайт Cloudflare, см. README.md.
+name = "kino-bot"
+main = "worker.js"
+compatibility_date = "2025-06-01"
