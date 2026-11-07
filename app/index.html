@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Заброшки</title>
+<meta name="description" content="Поиск заброшенных объектов на карте — работает на телефоне без ПК">
+<meta name="theme-color" content="#15181d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Заброшки">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="map"></div>
+
+<div id="topbar">
+  <div class="seg" id="layerSeg">
+    <button data-layer="sat" class="on">Спутник</button><button data-layer="hyb">Гибрид</button><button data-layer="osm">Схема</button>
+  </div>
+  <button id="btnDate" class="round" title="Дата снимка">📅</button>
+  <button id="btnLocate" class="round" title="Где я">◎</button>
+</div>
+<div id="dateBadge" class="hidden"></div>
+
+<div id="drawBar" class="hidden">
+  <span id="drawText">Нажимайте на карту по углам области</span>
+  <button id="drawUndo">↶</button><button id="drawCancel">✕</button><button id="drawDone" class="primary">Искать</button>
+</div>
+
+<div id="sheet" class="collapsed">
+  <div id="handle"><span></span></div>
+  <div id="actions">
+    <button id="btnSearch" class="primary big">🔍 Искать на экране</button>
+    <button id="btnDraw" class="big">✏️ Область</button>
+  </div>
+  <div id="summary" class="muted small">Приблизьте место поиска (до ~400 км²) и нажмите «Искать на экране».</div>
+  <nav class="tabs">
+    <button data-tab="list" class="on">Найдено</button><button data-tab="detail">Объект</button><button data-tab="runs">Поиски</button><button data-tab="more">Ещё</button>
+  </nav>
+  <section id="tab-list" class="tab on">
+    <div class="filters">
+      <label class="switch"><input type="checkbox" id="onlyReliable" checked> только надёжные</label>
+      <label class="switch"><input type="checkbox" id="showMarks" checked> мои отметки</label>
+      <div class="chips">
+        <span class="chip red on" data-g="red">● охрана <b id="c-red">0</b></span>
+        <span class="chip yellow on" data-g="yellow">● неясно <b id="c-yellow">0</b></span>
+        <span class="chip green on" data-g="green">● свободно <b id="c-green">0</b></span>
+      </div>
+      <div id="shownCount" class="muted small"></div>
+    </div>
+    <div id="list"></div>
+  </section>
+  <section id="tab-detail" class="tab"><div id="detail" class="muted">Нажмите на метку на карте или в списке.</div></section>
+  <section id="tab-runs" class="tab">
+    <div id="runs"></div>
+    <h4>Выгрузить текущий поиск</h4>
+    <div class="row wrap">
+      <button data-exp="kml">KML</button><button data-exp="gpx">GPX</button><button data-exp="geojson">GeoJSON</button><button data-exp="csv">CSV</button>
+    </div>
+    <div class="muted small">KML/GPX открываются в OsmAnd, Organic Maps, Locus, Google Earth. Выгружается то, что видно с текущими фильтрами.</div>
+  </section>
+  <section id="tab-more" class="tab">
+    <div id="installBox"></div>
+    <h4>Как это работает</h4>
+    <div class="small">
+      Поиск идёт целиком на телефоне: программа скачивает данные OpenStreetMap для области и проверяет их по тем же правилам,
+      что и версия для ПК. <b>Надёжная метка</b> — здание с тегом заброшенности OSM (руины, abandoned, disused …) на самом здании,
+      если ему ничего не противоречит (парк, музей, стройка …). Закрытые магазины в жилых домах, дачи, гаражи, снесённые объекты
+      заброшкой не считаются. Несколько зданий одного объекта показываются одной территорией с контуром.
+      <br><br>Цвет — охрана: <span class="red-t">красный</span> — КПП, шлагбаум, действующая часть, access=private;
+      <span class="yellow-t">жёлтый</span> — неясно; <span class="green-t">зелёный</span> — признаков охраны в OSM нет.
+      Это подсказка, а не гарантия — на месте смотрите сами и соблюдайте закон.
+      <br><br>Без ПК не работают нейросети по снимкам: построек, которых нет в OSM, телефонная версия не найдёт.
+      Зато снимки разных лет можно смотреть самому (📅).
+      <br><br><b>Долгое нажатие на карту</b> — своя отметка «здесь заброшка / не заброшка» (хранится на телефоне, попадает в выгрузку).
+    </div>
+    <h4>Данные</h4>
+    <div class="row wrap"><button id="btnClearCache">Очистить кэш OSM</button><button id="btnExportMarks">Выгрузить мои отметки</button></div>
+    <div id="storageInfo" class="muted small"></div>
+    <div class="muted small" style="margin-top:8px">Снимки © Esri, Maxar, Earthstar Geographics · карта © участники OpenStreetMap ·
+      данные OSM через Overpass API · фото и статьи — Википедия и Викисклад.</div>
+  </section>
+</div>
+
+<div id="progress" class="hidden">
+  <div class="pbox">
+    <div id="pMsg">Поиск…</div>
+    <div class="pbar"><div id="pFill"></div></div>
+    <div id="pLog" class="muted small"></div>
+    <button id="pCancel">Отменить</button>
+  </div>
+</div>
+<div id="toast" class="hidden"></div>
+<div id="bigimg" class="hidden"><img alt=""><div class="cap"></div></div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
