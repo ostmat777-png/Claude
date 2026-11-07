@@ -122,7 +122,7 @@ $('#drawDone').addEventListener('click', () => {
 
 function progress(msg, done, total) {
   $('#pMsg').textContent = msg || 'Поиск…';
-  $('#pFill').style.width = total ? `${Math.round(100 * done / total)}%` : '5%';
+  $('#pFill').style.width = total ? `${Math.max(3, Math.round(100 * done / total))}%` : '3%';
 }
 $('#pCancel').addEventListener('click', () => {
   if (S.worker) { S.worker.terminate(); S.worker = null; }

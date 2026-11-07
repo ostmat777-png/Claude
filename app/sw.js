@@ -1,6 +1,6 @@
 // Оболочка приложения хранится на телефоне: открывается без сети (сохранённые поиски, отметки).
 // Снимки и данные OSM не кэшируются здесь (их кэширует браузер и IndexedDB приложения).
-const VERSION = 'zabroshki-v1';
+const VERSION = 'zabroshki-v2';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'core.js', 'store.js', 'worker.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css', 'vendor/leaflet/images/layers.png',

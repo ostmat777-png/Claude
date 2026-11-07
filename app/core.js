@@ -21,10 +21,10 @@ export const GROUPS = [
   nwr["access"~"^(private|no|military|permit)$"]["highway"!~"."]["barrier"!~"."];
   nwr["barrier"]; nwr["building"="guardhouse"]; nwr["military"="checkpoint"]; nwr["amenity"="security"];
   node["place"]; way["place"];
-`, 0.08],
+`, 0.06],
   ['buildings', `
   way["building"]; relation["building"];
-`, 0.05],
+`, 0.035],
   ['leisure', `
   nwr["leisure"~"^(park|garden|nature_reserve|recreation_ground|playground|sports_centre|stadium)$"];
   nwr["boundary"="protected_area"];
@@ -33,12 +33,16 @@ export const GROUPS = [
 `, 0.12],
 ];
 
+// публичные серверы Overpass (CORS разрешён); lz4/z — отдельные машины основного overpass-api.de
 export const MIRRORS = [
   'https://overpass-api.de/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
+  'https://lz4.overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
+  'https://z.overpass-api.de/api/interpreter',
 ];
+const host = (u) => u.split('/')[2];
 
 export function chunks(s, w, n, e, stepLat) {
   // равные куски (без узких полосок по краю)
@@ -68,23 +72,26 @@ export async function fetchOSM(bbox, hooks = {}) {
   const [s0, w0, n0, e0] = bbox;
   const s = s0 - m, w = w0 - 2 * m, n = n0 + m, e = e0 + 2 * m;
   const plan = [];
-  for (const [name, body, step] of GROUPS) for (const ch of chunks(s, w, n, e, step)) plan.push({ name, body, ch });
+  for (const [name, body, step] of GROUPS) for (const ch of chunks(s, w, n, e, step)) plan.push({ name, body, ch, n: plan.length + 1 });
   const byId = new Map();
   const failed = [];
   const penalty = new Map();
   let good = 0;
   let done = 0;
 
-  async function one(body, ch) {
+  // одна попытка на сервер, не больше 3 серверов на кусок: перегруженный сервер (504) обычно справляется с куском
+  // поменьше, поэтому после неудач кусок сразу делится на 4 (до 3 раз), а не ждёт минутами
+  const keyOf = async (body, ch) => 'ovp:' + await sha1(overpassQuery(body, ch));
+  async function one(body, ch, label) {
     const q = overpassQuery(body, ch);
-    const key = 'ovp:' + await sha1(q);
+    const key = await keyOf(body, ch);
     if (hooks.cacheGet) {
       const c = await hooks.cacheGet(key);
       if (c) return c;
     }
     const errors = [];
     const t0 = Date.now();
-    for (let attempt = 0; attempt < 10 && Date.now() - t0 < 12 * 60e3; attempt++) {
+    for (let attempt = 0; attempt < 3 && Date.now() - t0 < 4 * 60e3; attempt++) {
       if (hooks.signal?.aborted) throw new Error('отменено');
       const now = Date.now();
       const order = MIRRORS.map((u, i) => i).sort((a, b) =>
@@ -93,10 +100,14 @@ export async function fetchOSM(bbox, hooks = {}) {
       const i = order[0];
       const url = MIRRORS[i];
       const wait = (penalty.get(url) || 0) - now;
-      if (wait > 0) await sleep(Math.min(wait, 30e3));
+      if (wait > 0) {
+        hooks.log?.(`OSM: все серверы заняты, жду ${Math.round(Math.min(wait, 30e3) / 1000)} с и пробую снова (${label})`);
+        await sleep(Math.min(wait, 30e3));
+      }
+      hooks.log?.(`OSM: ${label} — запрос к ${host(url)}…`);
       try {
         const ctl = new AbortController();
-        const tm = setTimeout(() => ctl.abort(), 120e3);
+        const tm = setTimeout(() => ctl.abort(), 100e3);
         const onAbort = () => ctl.abort();
         hooks.signal?.addEventListener('abort', onAbort);
         let r;
@@ -118,31 +129,41 @@ export async function fetchOSM(bbox, hooks = {}) {
         return els;
       } catch (ex) {
         if (hooks.signal?.aborted) throw new Error('отменено');
-        const msg = String(ex && ex.message || ex);
-        errors.push(url.split('/')[2] + ': ' + msg);
-        hooks.log?.(`OSM: ${url.split('/')[2]} — ${msg}, пробую другой сервер`);
-        penalty.set(url, Date.now() + (msg.includes('429') ? 60e3 : msg.includes('abort') ? 300e3 : 10e3 + 5e3 * attempt));
+        let msg = String(ex && ex.message || ex);
+        if (/abort/i.test(msg)) msg = 'не ответил за 100 с';
+        else if (msg.includes('429')) msg = 'слишком много запросов с вашего адреса (429; с VPN бывает чаще)';
+        else if (/HTTP 50[234]/.test(msg)) msg = 'перегружен (' + msg + ')';
+        else if (/fetch|network/i.test(msg)) msg = 'нет связи с сервером';
+        errors.push(host(url) + ': ' + msg);
+        hooks.log?.(`OSM: ${host(url)} ${msg} — пробую другой сервер (${label})`);
+        penalty.set(url, Date.now() + (msg.includes('429') ? 60e3 : msg.includes('100 с') ? 180e3 : 20e3));
       }
     }
     throw new Error(errors.slice(-3).join('; '));
   }
 
+  const GROUP_RU = { context: 'контекст', buildings: 'здания', leisure: 'парки и музеи' };
   async function split(item, depth) {
     try {
-      return await one(item.body, item.ch);
+      return await one(item.body, item.ch, `запрос ${item.n} из ${plan.length}: ${GROUP_RU[item.name] || item.name}` + (depth ? `, часть ${'¼'.repeat(depth)}` : ''));
     } catch (ex) {
       if (hooks.signal?.aborted) throw ex;
-      if (depth >= 2) { failed.push(item.name); return []; }
+      if (depth >= 3) { failed.push(item.name); return []; }
+      hooks.log?.(`OSM: делю ${GROUP_RU[item.name] || item.name} на 4 части поменьше — так серверы отвечают охотнее`);
       const [s1, w1, n1, e1] = item.ch;
       const ml = (s1 + n1) / 2, mo = (w1 + e1) / 2;
       const res = [];
+      const nFailed = failed.length;
       for (const ch of [[s1, w1, ml, mo], [s1, mo, ml, e1], [ml, w1, n1, mo], [ml, mo, n1, e1]]) {
         res.push(...await split({ ...item, ch }, depth + 1));
       }
+      // все части скачались — запомнить и под исходным запросом (повторный поиск не начнёт с перегрузки сервера)
+      if (failed.length === nFailed && hooks.cachePut) await hooks.cachePut(await keyOf(item.body, item.ch), res);
       return res;
     }
   }
 
+  hooks.progress?.(0, plan.length, `Загрузка OSM: 0 из ${plan.length} запросов`);
   let next = 0;
   const par = hooks.parallel || 2;
   async function worker() {
@@ -151,7 +172,7 @@ export async function fetchOSM(bbox, hooks = {}) {
       const els = await split(it, 0);
       for (const el of els) byId.set(el.type + '/' + el.id, el);
       done++;
-      hooks.progress?.(done, plan.length, `OSM: ${done}/${plan.length} запросов`);
+      hooks.progress?.(done, plan.length, `Загрузка OSM: готово ${done} из ${plan.length} запросов`);
     }
   }
   await Promise.all(Array.from({ length: Math.min(par, plan.length) }, worker));
