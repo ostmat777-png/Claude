@@ -125,34 +125,166 @@ function progress(msg, done, total) {
   $('#pFill').style.width = total ? `${Math.max(3, Math.round(100 * done / total))}%` : '3%';
 }
 $('#pCancel').addEventListener('click', () => {
+  if (S.bgReg) { S.bgCancel?.(); }
   if (S.worker) { S.worker.terminate(); S.worker = null; }
   S.abort?.abort();
   $('#progress').classList.add('hidden');
+  store.del('kv', 'pending').catch(() => {});
   toast('Поиск отменён');
 });
+$('#pHide').addEventListener('click', () => {
+  S.bgHide?.();
+  $('#progress').classList.add('hidden');
+  toast('Скачивается в фоне. Когда закончится — нажмите на уведомление или откройте приложение.', 6000);
+});
 
-async function startSearch(area) {
+async function startSearch(area, opts = {}) {
   const a = km2(area);
   if (a > MAX_KM2) return toast(`Слишком большая область (${a.toFixed(0)} км²). Приблизьте карту до ${MAX_KM2} км² или нарисуйте область.`, 6000);
-  if (a > 150 && !confirm(`Область ${a.toFixed(0)} км². На телефоне это займёт несколько минут и ~${Math.round(a / 20)} МБ трафика. Продолжить?`)) return;
+  if (!opts.resume && a > 150 && !confirm(`Область ${a.toFixed(0)} км². На телефоне это займёт несколько минут и ~${Math.round(a / 20)} МБ трафика. Продолжить?`)) return;
+  S.bgCancelled = false;
   $('#progress').classList.remove('hidden');
+  $('#pHide').classList.add('hidden');
   $('#pLog').textContent = `Область ${a.toFixed(1)} км². Загружаю данные OpenStreetMap…`;
   progress('Загрузка OSM…', 0, 0);
   const t0 = Date.now();
   try {
+    // 1) данные OSM: фоновой загрузкой браузера (можно выйти из приложения), если она есть
+    const bg = await backgroundDownload(area, opts);
+    if (bg === 'hidden') return;          // качается в фоне, результат покажем, когда вернётесь
+    if (bg === 'cancelled') throw new Error('отменено');
+    // 2) поиск (всё скачанное — уже на телефоне; что не скачалось — докачается здесь с запасными серверами)
+    await store.put('kv', { area, status: 'foreground', ts: Date.now() }, 'pending').catch(() => {});
+    await keepAwake(true);
     const res = await runSearch(area);
     const run = { name: runName(res.cands, a), date: new Date().toISOString(), area, km2: a, stats: res.stats, cands: res.cands };
     run.stats.total_s = Math.round((Date.now() - t0) / 1000);
     try { run.id = await store.put('runs', run); } catch (e) { toast('Не удалось сохранить поиск на телефоне — места мало?'); }
     try { localStorage.setItem('lastRun', String(run.id || '')); } catch (e) { /* ok */ }
+    await store.del('kv', 'pending').catch(() => {});
     openRun(run);
     $('#progress').classList.add('hidden');
-    toast(`Готово за ${run.stats.total_s} с: надёжных меток ${run.stats.reliable}`);
+    toast(`Готово: надёжных меток ${run.stats.reliable}`);
   } catch (e) {
     $('#progress').classList.add('hidden');
-    if (String(e.message || e) !== 'отменено') toast('Поиск не удался: ' + (e.message || e) + '. Проверьте интернет и попробуйте ещё раз.', 8000);
+    if (String(e.message || e) === 'отменено') await store.del('kv', 'pending').catch(() => {});
+    else toast('Поиск не удался: ' + (e.message || e) + '. Проверьте интернет и попробуйте ещё раз.', 8000);
+  } finally {
+    keepAwake(false);
   }
 }
+
+/* ---- экран не гаснет, пока идёт поиск на виду (там, где нет фоновой загрузки) */
+async function keepAwake(on) {
+  try {
+    if (on && 'wakeLock' in navigator && !S.wake) S.wake = await navigator.wakeLock.request('screen');
+    if (!on && S.wake) { await S.wake.release(); S.wake = null; }
+  } catch (e) { S.wake = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.wake === null && !$('#progress').classList.contains('hidden')) keepAwake(true);
+});
+
+/* ---- фоновая загрузка данных OSM (Background Fetch: Chrome, Яндекс, Samsung на Android) */
+async function bgManager() {
+  try {
+    if (!('serviceWorker' in navigator) || !('BackgroundFetchManager' in self)) return null;
+    const reg = await navigator.serviceWorker.ready;
+    return reg.backgroundFetch || null;
+  } catch (e) { return null; }
+}
+async function backgroundDownload(area, opts) {
+  const bf = opts.noBg ? null : await bgManager();
+  if (!bf) return 'none';
+  let reg = null;
+  if (opts.bgId) reg = await bf.get(opts.bgId);
+  if (!reg) {
+    const plan = core.osmPlan(core.areaBbox(area));
+    const missing = [];
+    for (const it of plan) if (!(await cacheGet(await core.cacheKey(it.q)))) missing.push(it);
+    if (!missing.length) return 'cached';
+    progress('Проверяю серверы OpenStreetMap…', 0, 0);
+    const ok = await core.probeMirrors();
+    if (!ok.length) { $('#pLog').textContent = 'Серверы OSM сейчас не отвечают на быструю проверку — пробую обычной загрузкой…'; return 'none'; }
+    const best = ok.slice(0, 2).map((m) => m.url);   // нагрузка на два самых быстрых сервера
+    const urls = missing.map((it, i) => core.overpassGetUrl(best[i % best.length], it.q));
+    const id = 'zab-' + Date.now();
+    try {
+      reg = await bf.fetch(id, urls, { title: `Заброшки: загрузка данных OSM (${missing.length} запросов)`,
+        icons: [{ src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' }], downloadTotal: 0 });
+    } catch (e) { $('#pLog').textContent = 'Фоновая загрузка недоступна (' + e.message + ') — качаю на экране'; return 'none'; }
+    await store.put('kv', { area, status: 'running', bgId: id, total: missing.length, ts: Date.now() }, 'pending').catch(() => {});
+  }
+  return watchBackground(reg);
+}
+function watchBackground(reg) {
+  return new Promise((resolve) => {
+    S.bgReg = reg;
+    let done = 0, total = 0, settled = false;
+    $('#pHide').classList.remove('hidden');
+    const show = () => {
+      progress(`Скачивается в фоне: ${done} из ${total || '?'} запросов`, done, total);
+      $('#pLog').innerHTML = 'Можно выйти из приложения или выключить экран — браузер докачает сам и покажет уведомление. '
+        + 'Нажмите на него, когда загрузка закончится.';
+    };
+    reg.matchAll().then((recs) => {
+      total = recs.length; show();
+      recs.forEach((r) => r.responseReady.then(() => { done++; show(); }, () => { done++; show(); }));
+    });
+    const end = async (how) => {
+      if (settled) return; settled = true;
+      S.bgReg = null;
+      $('#pHide').classList.add('hidden');
+      if (how === 'cancelled' || how === 'hidden') return resolve(how);
+      progress('Сохраняю скачанное…', total, total);
+      // ответы складывает service worker; на всякий случай ждём его не дольше 20 с
+      for (let i = 0; i < 40; i++) {
+        const p = await store.get('kv', 'pending').catch(() => null);
+        if (!p || p.status === 'downloaded') break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      resolve('done');
+    };
+    const check = () => { if (reg.result === 'success' || reg.result === 'failure') end('done'); };
+    reg.addEventListener('progress', check);
+    check();
+    // страховка: если браузер не качает (бывает в некоторых браузерах) — отменить и качать на экране
+    let lastBytes = -1, lastChange = Date.now();
+    const stallMs = S.bgStallMs || 120e3;
+    const wd = setInterval(async () => {
+      if (settled) return clearInterval(wd);
+      if (reg.downloaded !== lastBytes || done > 0 && done !== S._lastDone) { lastBytes = reg.downloaded; S._lastDone = done; lastChange = Date.now(); return; }
+      if (document.visibilityState === 'visible' && Date.now() - lastChange > stallMs) {
+        clearInterval(wd);
+        $('#pLog').textContent = 'Фоновая загрузка в этом браузере не идёт — качаю на экране (не выключайте экран)';
+        try { await reg.abort(); } catch (e) { /* ok */ }
+        if (!settled) { settled = true; S.bgReg = null; $('#pHide').classList.add('hidden'); resolve('stalled'); }
+      }
+    }, 3000);
+    S.bgHide = () => end('hidden');
+    S.bgCancel = async () => { try { await reg.abort(); } catch (e) { /* ok */ } end('cancelled'); };
+  });
+}
+async function resumePending(fromClick) {
+  const p = await store.get('kv', 'pending').catch(() => null);
+  if (!p || !p.area) return;
+  if (p.status === 'aborted') { await store.del('kv', 'pending'); return; }
+  if (p.status === 'running' || p.status === 'downloaded') {
+    const bf = await bgManager();
+    const reg = bf && p.bgId ? await bf.get(p.bgId) : null;
+    if (reg && reg.result === '') {      // ещё качается
+      if (!fromClick) toast('Поиск ещё скачивается в фоне — показываю прогресс');
+      return startSearch(p.area, { resume: true, bgId: p.bgId });
+    }
+    toast('Данные скачаны — показываю результат');
+    return startSearch(p.area, { resume: true, noBg: true });   // недокачанное — обычной загрузкой с делением
+  }
+  if (p.status === 'foreground' && Date.now() - p.ts < 3 * 86400e3) {
+    if (confirm('Прошлый поиск прервался. Продолжить? Уже скачанное заново не качается.')) startSearch(p.area, { resume: true });
+    else await store.del('kv', 'pending');
+  }
+}
+navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.type === 'bg-click') resumePending(true); });
 
 function runSearch(area) {
   return new Promise((resolve, reject) => {
@@ -569,5 +701,12 @@ window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); S.in
   try { const id = +localStorage.getItem('lastRun'); if (id) last = await store.get('runs', id); } catch (e) { /* ok */ }
   if (last) openRun(last); else render();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  resumePending(new URLSearchParams(location.search).has('resume'));
 })();
+// вернулись в приложение, пока оно было открыто в фоне: если загрузка закончилась — показать результат
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !$('#progress').classList.contains('hidden')) return;
+  const p = await store.get('kv', 'pending').catch(() => null);
+  if (p && (p.status === 'downloaded' || p.status === 'running')) resumePending(true);
+});
 window.__zab = { S, map, core };   // для отладки

@@ -65,14 +65,43 @@ export function overpassQuery(body, bbox, timeout = 90) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Скачивает OSM для области. hooks: {fetch, cacheGet, cachePut, progress(done,total,msg), signal, log} */
-export async function fetchOSM(bbox, hooks = {}) {
-  const f = hooks.fetch || fetch;
+/** План запросов OSM для области: [{name, body, ch, n, q}] (с запасом по краям для контекста) */
+export function osmPlan(bbox) {
   const m = 0.004;
   const [s0, w0, n0, e0] = bbox;
   const s = s0 - m, w = w0 - 2 * m, n = n0 + m, e = e0 + 2 * m;
   const plan = [];
-  for (const [name, body, step] of GROUPS) for (const ch of chunks(s, w, n, e, step)) plan.push({ name, body, ch, n: plan.length + 1 });
+  for (const [name, body, step] of GROUPS) for (const ch of chunks(s, w, n, e, step)) {
+    plan.push({ name, body, ch, n: plan.length + 1, q: overpassQuery(body, ch) });
+  }
+  return plan;
+}
+/** ключ кэша ответа Overpass (одинаковый у поиска и у фоновой загрузки) */
+export async function cacheKey(q) { return 'ovp:' + await sha1(q); }
+/** GET-адрес запроса (фоновая загрузка браузера не умеет POST с телом) */
+export function overpassGetUrl(mirror, q) { return mirror + '?data=' + encodeURIComponent(q); }
+/** Быстрая проверка серверов: [{url, ms}] отвечающих, самые быстрые первыми */
+export async function probeMirrors(hooks = {}, timeoutMs = 9000) {
+  const f = hooks.fetch || fetch;
+  const q = '[out:json][timeout:8];node(60.0,30.0,60.0005,30.0005);out ids 1;';
+  const res = await Promise.all(MIRRORS.map(async (url) => {
+    const t = Date.now();
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const r = await f(overpassGetUrl(url, q), { signal: ctl.signal });
+      if (!r.ok) return null;
+      const txt = await r.text();
+      return txt.trimStart().startsWith('{') ? { url, ms: Date.now() - t } : null;
+    } catch (e) { return null; } finally { clearTimeout(tm); }
+  }));
+  return res.filter(Boolean).sort((a, b) => a.ms - b.ms);
+}
+
+/** Скачивает OSM для области. hooks: {fetch, cacheGet, cachePut, progress(done,total,msg), signal, log} */
+export async function fetchOSM(bbox, hooks = {}) {
+  const f = hooks.fetch || fetch;
+  const plan = osmPlan(bbox);
   const byId = new Map();
   const failed = [];
   const penalty = new Map();
@@ -81,7 +110,7 @@ export async function fetchOSM(bbox, hooks = {}) {
 
   // одна попытка на сервер, не больше 3 серверов на кусок: перегруженный сервер (504) обычно справляется с куском
   // поменьше, поэтому после неудач кусок сразу делится на 4 (до 3 раз), а не ждёт минутами
-  const keyOf = async (body, ch) => 'ovp:' + await sha1(overpassQuery(body, ch));
+  const keyOf = async (body, ch) => cacheKey(overpassQuery(body, ch));
   async function one(body, ch, label) {
     const q = overpassQuery(body, ch);
     const key = await keyOf(body, ch);
@@ -944,6 +973,9 @@ export function buildComplexes(cands, lp) {
 /* ============================================================== весь поиск */
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+/** [s, w, n, e] области (так же, как считает search) */
+export function areaBbox(areaLL) { const b = bboxOf(areaLL); return [b[1], b[0], b[3], b[2]]; }
+
 /** areaLL: Polygon в градусах. hooks — как в fetchOSM + elements (готовые элементы OSM, для тестов) */
 export async function search(areaLL, hooks = {}) {
   const t0 = Date.now();
@@ -951,7 +983,7 @@ export async function search(areaLL, hooks = {}) {
   const b = bboxOf(areaLL);
   const lp = new LocalProj((b[1] + b[3]) / 2, (b[0] + b[2]) / 2);
   let elements = hooks.elements, failed = [];
-  if (!elements) ({ elements, failed } = await fetchOSM([b[1], b[0], b[3], b[2]], hooks));
+  if (!elements) ({ elements, failed } = await fetchOSM(areaBbox(areaLL), hooks));
   const tOsm = Date.now();
   st('Разбор данных OSM…'); await tick();
   const d = parse(elements);
