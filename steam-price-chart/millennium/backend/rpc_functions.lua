@@ -1,7 +1,6 @@
 local logger     = require("logger")
 local millennium = require("millennium")
 local http       = require("http")
-local cjson      = require("cjson")
 
 -- Страница магазина Steam запрещает (CSP) запросы на чужие сайты, поэтому
 -- история цен (IsThereAnyDeal) и курсы валют скачиваются здесь, в бэкенде.
@@ -20,25 +19,21 @@ local SETTING_KEYS = {
     historyRegion = true,
 }
 
-local function result(tbl)
-    local ok, encoded = pcall(cjson.encode, tbl)
-    if ok then
-        return encoded
-    end
-    return '{"status":0,"error":"encode failed"}'
-end
+-- Функции возвращают таблицы: Millennium передаёт их странице как объекты.
+-- Голую строку Millennium пытается разобрать как JSON (ключ из одних цифр стал бы числом),
+-- поэтому строки всегда лежат внутри таблицы.
 
 ---@ffi
---- GET-запрос на один из разрешённых сайтов. Возвращает JSON-строку {status, body} или {status = 0, error}.
+--- GET-запрос на один из разрешённых сайтов. Возвращает {status, body} или {status = 0, error}.
 ---@param url string
----@return string
+---@return table
 function spcFetch(url)
     if type(url) ~= "string" then
-        return result({ status = 0, error = "bad url" })
+        return { status = 0, error = "bad url" }
     end
     local host = url:match("^https://([^/:?#]+)")
     if not host or not ALLOWED_HOSTS[host:lower()] then
-        return result({ status = 0, error = "host not allowed" })
+        return { status = 0, error = "host not allowed" }
     end
 
     local ok, res, err = pcall(http.get, url, {
@@ -48,27 +43,27 @@ function spcFetch(url)
     })
     if not ok then
         logger:error("spcFetch failed: " .. tostring(res))
-        return result({ status = 0, error = tostring(res) })
+        return { status = 0, error = tostring(res) }
     end
     if not res then
-        return result({ status = 0, error = tostring(err or "request failed") })
+        return { status = 0, error = tostring(err or "request failed") }
     end
-    return result({ status = res.status, body = res.body or "" })
+    return { status = tonumber(res.status) or 0, body = res.body or "" }
 end
 
 ---@ffi
---- Прочитать настройку плагина. Пустая строка, если не задана.
+--- Прочитать настройку плагина. {value = ""}, если не задана.
 ---@param key string
----@return string
+---@return table
 function spcGetSetting(key)
     if not SETTING_KEYS[key] then
-        return ""
+        return { value = "" }
     end
     local ok, value = pcall(millennium.config.get, key)
     if ok and type(value) == "string" then
-        return value
+        return { value = value }
     end
-    return ""
+    return { value = "" }
 end
 
 ---@ffi

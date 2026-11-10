@@ -1,7 +1,7 @@
 [plugin]
 id = "com.steampricechart.plugin"
 name = "Steam Price Chart"
-version = "1.0.0"
+version = "1.0.1"
 author = "steam-price-chart"
 description = "Под ценой игры в магазине: мини-график истории цены и скидок, таблица цен по регионам (KZ, UA, RU, US) в рублях."
 
