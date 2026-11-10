@@ -33,7 +33,10 @@ const adapter = {
 	},
 
 	async getSetting(key: string): Promise<string | undefined> {
-		const value = await backend.spcGetSetting(key);
+		// бэкенд отвечает таблицей {value}; на всякий случай принимаем и голое значение
+		const r: unknown = await backend.spcGetSetting(key);
+		const value = r && typeof r === 'object' ? (r as { value?: unknown }).value : r;
+		if (typeof value === 'number') return String(value);
 		return typeof value === 'string' && value !== '' ? value : undefined;
 	},
 
