@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Steam Price Chart",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Под ценой игры в магазине Steam: график истории цены и скидок, цены в Казахстане, Украине, России и США в рублях.",
   "permissions": ["storage"],
   "host_permissions": [

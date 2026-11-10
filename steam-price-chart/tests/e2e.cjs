@@ -127,7 +127,9 @@ function backend(url) {
   assert.equal(r.label, '€ · пересчёт по скидкам в США (?)');
   assert.equal(r.paths, 2, 'линия цены и линия обычной цены');
   assert.ok(r.svgText.includes('−60%') && r.svgText.includes('−50%'), 'подписи скидок на графике: ' + r.svgText.join(','));
-  assert.match(r.stats, /Минимум: 23,99\s€ \(−60%\)/);
+  // рядом с ценой рубли по курсу ЦБ, как в таблице: 23,99 € × 92 = 2 207 ₽
+  assert.match(r.stats, /Минимум: 23,99\s€ ≈ 2\s207\s₽ \(−60%\)/);
+  assert.match(r.stats, /рубли по курсу ЦБ РФ на 11\.11\.2026/);
   assert.match(r.stats, /Скидок: 2/);
 
   const styles = await page.evaluate(() => {
@@ -156,14 +158,14 @@ function backend(url) {
   let c = await chartState();
   // тенге: обычная 17 999 ₸, −60% → 7 199 ₸ (вниз, как в Steam)
   assert.equal(c.label, '₸ · пересчёт по скидкам в США (?)');
-  assert.match(c.stats, /Минимум: 7\s199\s₸ \(−60%\)/);
+  assert.match(c.stats, /Минимум: 7\s199\s₸ ≈ 1\s296\s₽ \(−60%\)/); // 7 199 × 0,18
 
   // быстрый выбор региона над графиком: у Украины своя история в гривнах
   await page.selectOption('#spc-root select[name=chartRegion]', 'UA');
   await page.waitForFunction(() => /₴/.test(document.querySelector('#spc-root .spc-head > .spc-muted').textContent));
   c = await chartState();
   assert.equal(c.label, '₴', 'настоящая история в гривнах, без пересчёта');
-  assert.match(c.stats, /Минимум: 489\s₴ \(−65%\)/);
+  assert.match(c.stats, /Минимум: 489\s₴ ≈ 890\s₽ \(−65%\)/); // 489 × 1,82
   assert.equal(await page.evaluate(() => window.__store.historyRegion), 'UA');
 
   // в России игра не продаётся: пересчитать не во что, показана история США в долларах
@@ -171,12 +173,12 @@ function backend(url) {
   await page.waitForFunction(() => /Россия/.test(document.querySelector('#spc-root .spc-head > .spc-muted').textContent));
   c = await chartState();
   assert.equal(c.label, '$ · Россия: не продаётся, показаны цены США');
-  assert.match(c.stats, /Минимум: \$23\.99 \(−60%\)/);
+  assert.match(c.stats, /Минимум: \$23\.99 ≈ 1\s979\s₽ \(−60%\)/); // 23,99 × 82,5
 
   // наведение на график показывает подсказку
   const box = await page.locator('#spc-root .spc-chart svg').boundingBox();
   await page.mouse.move(box.x + box.width * 0.5, box.y + box.height / 2);
-  assert.match(await page.locator('#spc-root .spc-tip').innerText(), /\$/);
+  assert.match((await page.locator('#spc-root .spc-tip').innerText()).replace(/\s+/g, ' '), /\$[\d.]+ ≈ [\d ]+ ₽/);
 
   assert.deepEqual(direct, [], 'страница не ходит на чужие сайты напрямую');
   assert.deepEqual(pageErrors, []);
