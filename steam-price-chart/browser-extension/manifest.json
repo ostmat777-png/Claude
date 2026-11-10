@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Steam Price Chart",
+  "version": "1.0.0",
+  "description": "Под ценой игры в магазине Steam: график истории цены и скидок, цены в Казахстане, Украине, России и США в рублях.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://store.steampowered.com/*",
+    "https://api.isthereanydeal.com/*",
+    "https://www.cbr-xml-daily.ru/*",
+    "https://cdn.jsdelivr.net/*",
+    "https://latest.currency-api.pages.dev/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://store.steampowered.com/app/*"],
+      "js": ["steam-price-chart.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "steam-price-chart@example.org",
+      "strict_min_version": "121.0"
+    }
+  }
+}

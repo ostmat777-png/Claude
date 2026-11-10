@@ -1,0 +1,21 @@
+[plugin]
+id = "com.steampricechart.plugin"
+name = "Steam Price Chart"
+version = "1.0.0"
+author = "steam-price-chart"
+description = "Под ценой игры в магазине: мини-график истории цены и скидок, таблица цен по регионам (KZ, UA, RU, US) в рублях."
+
+[backend]
+entry = "backend/main.lua"
+sources = ["backend/**/*.lua"]
+
+[frontend]
+entry = "frontend/index.tsx"
+
+[webkit]
+# Скрипт для страниц магазина Steam внутри клиента
+entry = "webview/preload.ts"
+
+[compiler]
+# auto: найти установленный Millennium и сразу поставить плагин в него
+output_path = "auto"
