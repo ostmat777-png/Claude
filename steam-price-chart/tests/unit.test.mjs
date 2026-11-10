@@ -11,7 +11,7 @@ const code = readFileSync(join(here, '..', 'core', 'steam-price-chart.js'), 'utf
 const sandbox = { Intl, Date, Math, JSON, Number, Object, Array, String, Promise, setTimeout, clearTimeout };
 sandbox.globalThis = sandbox;
 vm.runInNewContext(code, sandbox);
-const { toSegments, salePeriods, clipToPeriod, fmtMoney, niceStep } = sandbox.SteamPriceChart._internal;
+const { toSegments, salePeriods, clipToPeriod, rebaseHistory, fmtMoney, niceStep } = sandbox.SteamPriceChart._internal;
 
 // массивы из vm-контекста имеют другой прототип: сравниваем «чистые» копии
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -59,4 +59,26 @@ test('niceStep: круглые деления шкалы', () => {
   assert.equal(niceStep(2400, 3), 1000);
   assert.equal(niceStep(60, 3), 20);
   assert.equal(niceStep(14.99, 3), 5);
+});
+
+test('rebaseHistory: скидки из истории в долларах, цены в тенге от нынешней цены в Казахстане', () => {
+  const us = [pt(0, 19.99, 19.99, 0), pt(10, 9.99, 19.99, 50), pt(20, 19.99, 19.99, 0), pt(30, 14.99, 29.99, 50), pt(40, 29.99, 29.99, 0)];
+  const kz = rebaseHistory(us, { currency: 'KZT', initial: 7999, final: 7999, discount: 0 });
+  assert.deepEqual(plain(kz.map((p) => [p.regular, p.price, p.cut, p.currency])), [
+    [5332, 5332, 0, 'KZT'], // обычная цена была ниже в той же пропорции: 7999 * 19.99 / 29.99
+    [5332, 2666, 50, 'KZT'],
+    [5332, 5332, 0, 'KZT'],
+    [7999, 3999, 50, 'KZT'], // Steam округляет цену со скидкой вниз
+    [7999, 7999, 0, 'KZT'],
+  ]);
+  assert.deepEqual(plain(kz.map((p) => p.t)), plain(us.map((p) => p.t)));
+});
+
+test('rebaseHistory: текущая цена берётся ровно из Steam, если скидка совпадает', () => {
+  const us = [pt(0, 59.99, 59.99, 0), pt(10, 23.99, 59.99, 60)];
+  const ua = rebaseHistory(us, { currency: 'UAH', initial: 1399, final: 559, discount: 60 });
+  assert.deepEqual(plain(ua.map((p) => [p.regular, p.price, p.cut])), [[1399, 1399, 0], [1399, 559, 60]]);
+  const eur = rebaseHistory(us, { currency: 'EUR', initial: 59.99, final: 59.99, discount: 0 });
+  assert.equal(eur[1].price, 23.99);
+  assert.deepEqual(plain(rebaseHistory([], { currency: 'KZT', initial: 100 })), []);
 });

@@ -26,7 +26,7 @@ const PRICES = {
 };
 const CBR = { Date: '2026-11-11T11:30:00+03:00', Valute: { USD: { Nominal: 1, Value: 82.5 }, KZT: { Nominal: 100, Value: 18 }, UAH: { Nominal: 10, Value: 18.2 }, EUR: { Nominal: 1, Value: 92 } } };
 const GAME_ID = '018d937f-2997-7131-b8b9-7c8af4825fa8';
-const hist = (iso, price, regular, cut) => ({ timestamp: iso, shop: { id: 61, name: 'Steam' }, deal: { price: { amount: price, amountInt: price * 100, currency: 'USD' }, regular: { amount: regular, amountInt: regular * 100, currency: 'USD' }, cut } });
+const hist = (iso, price, regular, cut, currency = 'USD') => ({ timestamp: iso, shop: { id: 61, name: 'Steam' }, deal: { price: { amount: price, amountInt: price * 100, currency }, regular: { amount: regular, amountInt: regular * 100, currency }, cut } });
 const HISTORY_US = [
   hist('2023-11-28T19:00:00+01:00', 59.99, 59.99, 0),
   hist('2023-11-21T19:00:00+01:00', 23.99, 59.99, 60),
@@ -34,6 +34,13 @@ const HISTORY_US = [
   hist('2021-06-24T19:00:00+01:00', 29.99, 59.99, 50),
   hist('2020-12-10T00:00:00+01:00', 59.99, 59.99, 0),
 ];
+// для Украины у «IsThereAnyDeal» есть своя история в гривнах: её надо показать как есть
+const HISTORY_UA = [
+  hist('2023-11-28T19:00:00+01:00', 1399, 1399, 0, 'UAH'),
+  hist('2023-11-21T19:00:00+01:00', 489, 1399, 65, 'UAH'),
+  hist('2020-12-10T00:00:00+01:00', 1399, 1399, 0, 'UAH'),
+];
+const HISTORY = { US: HISTORY_US, UA: HISTORY_UA };
 
 function backend(url) {
   const u = new URL(url);
@@ -44,7 +51,7 @@ function backend(url) {
     if (u.pathname === '/games/history/v2') {
       assert.ok(u.searchParams.get('since'), 'история запрашивается с параметром since (иначе только 3 месяца)');
       assert.equal(u.searchParams.get('shops'), '61');
-      return { status: 200, body: JSON.stringify(u.searchParams.get('country') === 'US' ? HISTORY_US : []) };
+      return { status: 200, body: JSON.stringify(HISTORY[u.searchParams.get('country')] || []) };
     }
   }
   return { status: 0, error: 'unexpected ' + url };
@@ -94,7 +101,8 @@ function backend(url) {
     return {
       afterMain: root.previousElementSibling.classList.contains('main'),
       rows: Array.from(root.querySelectorAll('tbody tr')).map((tr) => ({ cls: tr.className, text: tr.innerText.replace(/\s+/g, ' ').trim() })),
-      label: root.querySelector('.spc-head').innerText,
+      label: root.querySelector('.spc-head > .spc-muted').textContent,
+      pick: root.querySelector('.spc-head select[name=chartRegion]').value,
       paths: root.querySelectorAll('.spc-chart path').length,
       svgText: Array.from(root.querySelectorAll('.spc-chart text')).map((t) => t.textContent),
       stats: root.querySelector('.spc-stats').innerText.replace(/\s+/g, ' '),
@@ -114,10 +122,12 @@ function backend(url) {
   assert.equal(r.rows[1].cls, '');
   assert.match(r.rows[3].text, /\$59\.99\s*\$29\.99\s*−50%/);
   assert.match(r.rows[3].text, /≈ 2\s474 ₽/);
-  assert.match(r.label, /США.*Германия/, 'для региона аккаунта истории нет: график по США');
+  // график в валюте региона аккаунта: своей истории в евро нет, пересчитано по скидкам в США
+  assert.equal(r.pick, 'DE');
+  assert.equal(r.label, '€ · пересчёт по скидкам в США (?)');
   assert.equal(r.paths, 2, 'линия цены и линия обычной цены');
   assert.ok(r.svgText.includes('−60%') && r.svgText.includes('−50%'), 'подписи скидок на графике: ' + r.svgText.join(','));
-  assert.match(r.stats, /Минимум: \$23\.99 \(−60%\)/);
+  assert.match(r.stats, /Минимум: 23,99\s€ \(−60%\)/);
   assert.match(r.stats, /Скидок: 2/);
 
   const styles = await page.evaluate(() => {
@@ -136,7 +146,32 @@ function backend(url) {
   assert.equal(await page.evaluate(() => window.__store.homeRegion), 'KZ');
   assert.equal(await page.evaluate(() => window.__store.historyRegion), 'auto');
   assert.match(await page.locator('#spc-root tbody tr').first().innerText(), /ваш регион/);
-  assert.match(await page.locator('#spc-root .spc-head').innerText(), /США.*Казахстан/);
+  const chartState = () => page.evaluate(() => ({
+    pick: document.querySelector('#spc-root select[name=chartRegion]').value,
+    label: document.querySelector('#spc-root .spc-head > .spc-muted').textContent,
+    stats: document.querySelector('#spc-root .spc-stats').innerText.replace(/\s+/g, ' '),
+  }));
+  await page.waitForFunction(() => document.querySelector('#spc-root select[name=chartRegion]').value === 'KZ');
+  await page.waitForSelector('#spc-root .spc-chart svg');
+  let c = await chartState();
+  // тенге: обычная 17 999 ₸, −60% → 7 199 ₸ (вниз, как в Steam)
+  assert.equal(c.label, '₸ · пересчёт по скидкам в США (?)');
+  assert.match(c.stats, /Минимум: 7\s199\s₸ \(−60%\)/);
+
+  // быстрый выбор региона над графиком: у Украины своя история в гривнах
+  await page.selectOption('#spc-root select[name=chartRegion]', 'UA');
+  await page.waitForFunction(() => /₴/.test(document.querySelector('#spc-root .spc-head > .spc-muted').textContent));
+  c = await chartState();
+  assert.equal(c.label, '₴', 'настоящая история в гривнах, без пересчёта');
+  assert.match(c.stats, /Минимум: 489\s₴ \(−65%\)/);
+  assert.equal(await page.evaluate(() => window.__store.historyRegion), 'UA');
+
+  // в России игра не продаётся: пересчитать не во что, показана история США в долларах
+  await page.selectOption('#spc-root select[name=chartRegion]', 'RU');
+  await page.waitForFunction(() => /Россия/.test(document.querySelector('#spc-root .spc-head > .spc-muted').textContent));
+  c = await chartState();
+  assert.equal(c.label, '$ · Россия: не продаётся, показаны цены США');
+  assert.match(c.stats, /Минимум: \$23\.99 \(−60%\)/);
 
   // наведение на график показывает подсказку
   const box = await page.locator('#spc-root .spc-chart svg').boundingBox();
