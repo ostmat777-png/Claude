@@ -19,7 +19,7 @@
   'use strict';
   if (globalThis.SteamPriceChart) return;
 
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
 
   const REGIONS = [
     { cc: 'KZ', name: 'Казахстан' },
@@ -233,7 +233,7 @@
     );
     out.itadKey = (out.itadKey || '').trim();
     if (out.homeRegion !== AUTO && !REGION_NAME[out.homeRegion]) out.homeRegion = AUTO;
-    if (out.historyRegion !== AUTO && !REGION_NAME[out.historyRegion]) out.historyRegion = AUTO;
+    if (out.historyRegion !== AUTO && !/^[A-Z]{2}$/.test(out.historyRegion)) out.historyRegion = AUTO;
     return out;
   }
 
@@ -373,6 +373,35 @@
     return [Object.assign({}, points[i], { t: start })].concat(points.slice(i + 1));
   }
 
+  /**
+   * История в валюте региона, когда у IsThereAnyDeal нет своей истории в этой валюте:
+   * даты и проценты скидок берутся из имеющейся истории, обычная цена — нынешняя цена Steam в регионе
+   * (если обычная цена в исходной истории менялась, она меняется в той же пропорции).
+   * regional: { currency, initial, final, discount } из appdetails.
+   */
+  function rebaseHistory(base, regional) {
+    if (!base.length || !regional || !(regional.initial > 0)) return [];
+    const last = base[base.length - 1];
+    const lastRegular = last.regular > 0 ? last.regular : last.price;
+    if (!(lastRegular > 0)) return [];
+    const noCents = NO_CENTS.has(regional.currency);
+    const round = (v) => (noCents ? Math.round(v) : Math.round(v * 100) / 100);
+    // Steam округляет цену со скидкой вниз
+    const floor = (v) => (noCents ? Math.floor(v + 1e-6) : Math.floor(v * 100 + 1e-6) / 100);
+    const out = base.map((p) => {
+      const srcRegular = p.regular > 0 ? p.regular : p.price;
+      const cut = p.cut > 0 ? p.cut : srcRegular > 0 ? Math.max(0, Math.round((1 - p.price / srcRegular) * 100)) : 0;
+      const regular = round(regional.initial * (srcRegular / lastRegular));
+      return { t: p.t, regular, cut, price: cut > 0 ? floor((regular * (100 - cut)) / 100) : regular, currency: regional.currency };
+    });
+    const now = out[out.length - 1];
+    if (now.cut === (regional.discount || 0)) {
+      now.regular = regional.initial;
+      now.price = regional.final;
+    }
+    return out;
+  }
+
   function niceStep(maxValue, targetTicks) {
     const raw = maxValue / Math.max(1, targetTicks);
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -382,9 +411,9 @@
   }
 
   function compactMoney(v, currency) {
-    if (v >= 10000) {
-      const k = v / 1000;
-      return (Math.round(k * 10) / 10).toString().replace('.', ',') + 'k' + (currency === 'USD' ? '$' : ' ' + currencySymbol(currency));
+    if (v >= 100000) {
+      const k = Math.round(v / 1000);
+      return (currency === 'USD' ? '$' : '') + k.toLocaleString('ru-RU') + ' тыс' + (currency === 'USD' ? '' : ' ' + currencySymbol(currency));
     }
     return fmtMoney(v, currency, v >= 100 || Number.isInteger(v) ? 0 : 2);
   }
@@ -396,6 +425,7 @@
 #spc-root *{box-sizing:border-box}
 #spc-root .spc-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
 #spc-root .spc-title{color:#fff;font-size:14px;text-transform:uppercase;letter-spacing:.03em}
+#spc-root .spc-head select{width:auto;flex:0 0 auto;max-width:180px;padding:2px 6px;margin:0;height:auto}
 #spc-root .spc-muted{color:#8f98a0;font-size:12px}
 #spc-root .spc-grow{flex:1 1 auto}
 #spc-root .spc-btn{background:rgba(103,193,245,.18);color:#67c1f5;border:0;border-radius:2px;padding:3px 8px;font:inherit;font-size:12px;cursor:pointer}
@@ -459,7 +489,7 @@
 
     const W = Math.max(280, Math.round(box.clientWidth || 584));
     const H = 132;
-    const padL = 50, padR = 8, padT = 16, padB = 20;
+    const padL = 56, padR = 8, padT = 16, padB = 20;
     const plotW = W - padL - padR, plotH = H - padT - padB;
     const t0 = segs[0].t1, t1 = Math.max(now, t0 + DAY);
     const maxP = Math.max(...segs.map((s) => Math.max(s.price, s.regular))) || 1;
@@ -725,6 +755,7 @@
     const ui = {
       root: h('div', { id: 'spc-root', 'data-version': VERSION }),
       regionLabel: h('span', { class: 'spc-muted' }),
+      regionPick: h('select', { name: 'chartRegion', title: 'Регион и валюта графика' }),
       periods: h('span'),
       settings: h('div', { class: 'spc-settings', hidden: true }),
       chart: h('div', { class: 'spc-chart' }, h('div', { class: 'spc-msg', text: 'Загрузка истории цены…' })),
@@ -733,7 +764,7 @@
     };
     const gear = h('button', { class: 'spc-btn', type: 'button', title: 'Ключ IsThereAnyDeal и регионы', text: 'Настройки' });
     ui.root.append(
-      h('div', { class: 'spc-head' }, h('span', { class: 'spc-title', text: 'История цены' }), ui.regionLabel, h('span', { class: 'spc-grow' }), ui.periods, gear),
+      h('div', { class: 'spc-head' }, h('span', { class: 'spc-title', text: 'История цены' }), ui.regionPick, ui.regionLabel, h('span', { class: 'spc-grow' }), ui.periods, gear),
       ui.settings,
       ui.chart,
       ui.stats,
@@ -807,10 +838,26 @@
         keyHelp());
     };
 
+    const renderRegionPick = () => {
+      const current = historyCc();
+      const list = tableRegions();
+      const options = list.some((r) => r.cc === current) ? list : list.concat([{ cc: current, name: regionName(current) }]);
+      ui.regionPick.replaceChildren(...options.map((r) => h('option', { value: r.cc, selected: r.cc === current, text: r.name })));
+      ui.regionPick.style.display = state.settings.itadKey ? '' : 'none';
+    };
+    ui.regionPick.addEventListener('change', async () => {
+      state.settings.historyRegion = ui.regionPick.value;
+      try {
+        await adapter.setSetting('historyRegion', ui.regionPick.value);
+      } catch (e) { /* хотя бы до перезагрузки страницы */ }
+      loadChart();
+    });
+
     async function loadChart() {
       ui.stats.replaceChildren();
       state.hist = null;
       renderPeriods();
+      renderRegionPick();
       const key = state.settings.itadKey;
       if (!key) {
         ui.regionLabel.textContent = '';
@@ -825,29 +872,58 @@
           return;
         }
         const wanted = historyCc();
-        const order = [wanted].concat(wanted === 'US' ? [] : ['US']);
-        let hist = [], cc = order[0], lastErr = null;
-        for (const c of order) {
+        const history = async (cc) => {
           try {
-            hist = await itadHistory(adapter, key, id, c);
-            cc = c;
-            if (hist.length) break;
+            return await itadHistory(adapter, key, id, cc);
           } catch (e) {
             if (e.status === 401 || e.status === 403) throw e;
             lastErr = e;
+            return [];
+          }
+        };
+        let lastErr = null;
+        const [own, regional] = await Promise.all([
+          history(wanted),
+          fetchRegionPrice(adapter, appid, wanted).catch(() => null),
+        ]);
+        const regionOk = regional && regional.status === 'ok';
+        let hist, note = '', noteTitle = '';
+        if (regionOk && own.length && own[own.length - 1].currency === regional.currency) {
+          hist = own; // настоящая история в валюте региона
+        } else {
+          let base = own, baseCc = wanted;
+          if (!base.length && wanted !== 'US') {
+            base = await history('US');
+            baseCc = 'US';
+          }
+          if (!base.length) {
+            if (lastErr) throw lastErr;
+            ui.regionLabel.textContent = '';
+            ui.chart.replaceChildren(h('div', { class: 'spc-msg', text: 'IsThereAnyDeal ещё не записал ни одного изменения цены этой игры в Steam.' }));
+            return;
+          }
+          if (regionOk) {
+            hist = rebaseHistory(base, regional);
+            note = 'пересчёт по скидкам' + (baseCc !== wanted ? ' в ' + regionName(baseCc) : '') + ' (?)';
+            noteTitle =
+              'У IsThereAnyDeal нет истории цен Steam в валюте региона «' + regionName(wanted) + '». ' +
+              'Даты и проценты скидок взяты из истории IsThereAnyDeal' + (baseCc !== wanted ? ' по региону «' + regionName(baseCc) + '»' : '') + ', ' +
+              'обычная цена — нынешняя цена Steam в регионе «' + regionName(wanted) + '». ' +
+              'Если Steam когда-то менял региональную цену отдельно, на графике этого не видно.';
+          } else {
+            hist = base; // в регионе нет цены: показываем исходную историю как есть
+            note = regionName(wanted) + ': ' + (regional && regional.status === 'unavailable' ? 'не продаётся' : 'нет цены') +
+              (baseCc !== wanted ? ', показаны цены ' + regionName(baseCc) : '');
+            noteTitle = 'Игра ' + (regional && regional.status === 'unavailable' ? 'не продаётся' : 'не имеет цены') + ' в регионе «' + regionName(wanted) + '», ' +
+              'поэтому пересчитать историю в его валюту не из чего.';
           }
         }
-        if (!hist.length) {
-          if (lastErr) throw lastErr;
-          ui.chart.replaceChildren(h('div', { class: 'spc-msg', text: 'IsThereAnyDeal ещё не записал ни одного изменения цены этой игры в Steam.' }));
-          return;
-        }
         state.hist = hist;
-        state.histCc = cc;
+        state.histCc = wanted;
         state.histCurrency = hist[hist.length - 1].currency || 'USD';
-        const fallback = cc !== wanted;
-        ui.regionLabel.textContent =
-          regionName(cc) + ', ' + currencySymbol(state.histCurrency) + (fallback ? ' (по региону «' + regionName(wanted) + '» данных нет)' : '');
+        ui.regionLabel.textContent = currencySymbol(state.histCurrency) + (note ? ' · ' + note : '');
+        ui.regionLabel.title = noteTitle;
+        ui.regionLabel.style.cursor = noteTitle ? 'help' : '';
         renderPeriods();
         drawChart();
         renderStats(ui.stats, hist, state.histCurrency);
@@ -925,6 +1001,6 @@
     VERSION,
     mount,
     // для тестов
-    _internal: { toSegments, salePeriods, clipToPeriod, fmtMoney, niceStep, findAnchor, detectStoreCountry, regionName },
+    _internal: { toSegments, salePeriods, clipToPeriod, rebaseHistory, fmtMoney, niceStep, findAnchor, detectStoreCountry, regionName },
   };
 })();
