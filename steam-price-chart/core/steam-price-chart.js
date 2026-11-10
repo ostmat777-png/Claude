@@ -693,7 +693,8 @@
     return h('div', { class: 'spc-muted' },
       'Ключ бесплатный: войдите на ',
       h('a', { href: ITAD_KEY_PAGE, target: '_blank', rel: 'noopener noreferrer', text: 'isthereanydeal.com/apps/my' }),
-      ', нажмите «Register app», скопируйте «API key» и вставьте сюда.');
+      ', нажмите «Register app», откройте своё приложение и скопируйте «API key» ' +
+        '(не Client ID и не Client Secret из раздела OAuth).');
   }
 
   function findAnchor() {
@@ -852,7 +853,7 @@
         renderStats(ui.stats, hist, state.histCurrency);
       } catch (e) {
         if (e.status === 401 || e.status === 403) {
-          ui.chart.replaceChildren(keyForm({ err: true, text: 'IsThereAnyDeal не принял ключ: ' + e.message + '. Проверьте его и сохраните заново.' }));
+          ui.chart.replaceChildren(keyForm({ err: true, text: 'IsThereAnyDeal не принял ключ: ' + e.message + '. Нужен именно «API key» вашего приложения, а не Client ID или Client Secret из раздела OAuth.' }));
         } else {
           ui.chart.replaceChildren(
             h('div', { class: 'spc-msg' },
