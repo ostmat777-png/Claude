@@ -19,7 +19,7 @@
   'use strict';
   if (globalThis.SteamPriceChart) return;
 
-  const VERSION = '1.0.2';
+  const VERSION = '1.0.3';
 
   const REGIONS = [
     { cc: 'KZ', name: 'Казахстан' },
@@ -149,6 +149,16 @@
     } catch (e) {
       return currency;
     }
+  }
+
+  function fmtDay(t) {
+    const d = new Date(t);
+    return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+  }
+
+  /** «≈ 1 296 ₽» по курсу rub = { rate, ... }; пусто, если валюта уже рубли или курса нет. */
+  function rubText(amount, rub) {
+    return rub && rub.rate > 0 && isFinite(amount) ? '≈ ' + fmtMoney(Math.round(amount * rub.rate), 'RUB', 0) : '';
   }
 
   function fmtDate(t) {
@@ -477,7 +487,7 @@
 
   // ---------------------------------------------------------------- график
 
-  function renderChart(box, history, currency, periodYears) {
+  function renderChart(box, history, currency, periodYears, rub) {
     box.replaceChildren();
     const now = Date.now();
     const pts = clipToPeriod(history, periodYears, now);
@@ -596,9 +606,11 @@
       dot.setAttribute('cy', y(s.price));
       dot.setAttribute('visibility', 'visible');
       const till = s.t2 >= now - HOUR ? 'по сей день' : 'по ' + fmtDate(s.t2);
+      const inRub = (v) => (rub ? ' ' + rubText(v, rub) : '');
       tip.replaceChildren(
         h('b', { text: fmtMoney(s.price, currency) }),
-        s.cut > 0 ? '  −' + s.cut + '% (обычная ' + fmtMoney(s.regular, currency) + ')' : '  без скидки',
+        inRub(s.price),
+        s.cut > 0 ? '  −' + s.cut + '% (обычная ' + fmtMoney(s.regular, currency) + inRub(s.regular) + ')' : '  без скидки',
         h('br'),
         'с ' + fmtDate(s.t1) + ' ' + till
       );
@@ -618,7 +630,7 @@
     });
   }
 
-  function renderStats(box, history, currency) {
+  function renderStats(box, history, currency, rub) {
     box.replaceChildren();
     const now = Date.now();
     const segs = toSegments(history, now);
@@ -631,14 +643,16 @@
     const lastSale = periods[periods.length - 1];
 
     const items = [];
-    items.push(['Минимум: ', h('b', { text: fmtMoney(minPrice, currency) }), minSeg.cut > 0 ? ' (−' + minSeg.cut + '%)' : '', ', ' + fmtDate(minSeg.t1)]);
+    items.push(['Минимум: ', h('b', { text: fmtMoney(minPrice, currency) }), rub ? ' ' + rubText(minPrice, rub) : '',
+      minSeg.cut > 0 ? ' (−' + minSeg.cut + '%)' : '', ', ' + fmtDate(minSeg.t1)]);
     items.push(['Скидок: ', h('b', { text: String(periods.length) }), maxCut ? ', макс. −' + maxCut + '%' : '']);
     if (last.cut > 0) {
       items.push([h('span', { class: 'spc-green', text: 'Сейчас скидка −' + last.cut + '%' }), ' с ' + fmtDate(lastSale.t1)]);
     } else if (lastSale) {
       items.push(['Последняя скидка: ', h('b', { text: '−' + lastSale.maxCut + '%' }), ', ' + fmtDate(lastSale.t1) + ' – ' + fmtDate(lastSale.t2)]);
     }
-    items.push([h('span', { class: 'spc-muted', text: 'данные с ' + fmtDate(history[0].t) })]);
+    items.push([h('span', { class: 'spc-muted', text: 'данные с ' + fmtDate(history[0].t) +
+      (rub ? ' · рубли по курсу ' + rub.source + ' на ' + fmtDay(rub.date) : '') })]);
     for (const it of items) box.append(h('span', null, it));
   }
 
@@ -702,8 +716,7 @@
 
     const foot = h('div', { class: 'spc-foot' });
     if (ratesInfo) {
-      const d = new Date(ratesInfo.date);
-      foot.append('Курс ' + ratesInfo.source + ' на ' + String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear() + '. ');
+      foot.append('Курс ' + ratesInfo.source + ' на ' + fmtDay(ratesInfo.date) + '. ');
     } else {
       foot.append('Курс валют загрузить не удалось. ');
     }
@@ -784,6 +797,7 @@
       hist: null,
       histCc: '',
       histCurrency: '',
+      rub: null, // курс валюты графика в рубли (как в таблице)
     };
     // ваш регион: из настроек или из аккаунта Steam
     const homeCc = () => (state.settings.homeRegion === AUTO ? state.detected : state.settings.homeRegion);
@@ -797,7 +811,7 @@
     const drawChart = () => {
       if (!state.hist) return;
       const p = PERIODS.find((x) => x.id === state.period) || PERIODS[0];
-      renderChart(ui.chart, state.hist, state.histCurrency, p.years);
+      renderChart(ui.chart, state.hist, state.histCurrency, p.years, state.rub);
     };
 
     const renderPeriods = () => {
@@ -882,9 +896,10 @@
           }
         };
         let lastErr = null;
-        const [own, regional] = await Promise.all([
+        const [own, regional, rates] = await Promise.all([
           history(wanted),
           fetchRegionPrice(adapter, appid, wanted).catch(() => null),
+          fetchRubRates(adapter).catch(() => null),
         ]);
         const regionOk = regional && regional.status === 'ok';
         let hist, note = '', noteTitle = '';
@@ -921,12 +936,15 @@
         state.hist = hist;
         state.histCc = wanted;
         state.histCurrency = hist[hist.length - 1].currency || 'USD';
+        // цены в рублях рядом с ценами графика: перевод по курсу ЦБ, как в таблице (не цены российского региона)
+        const rate = rates && state.histCurrency !== 'RUB' ? rates.rates[state.histCurrency] : 0;
+        state.rub = rate > 0 ? { rate, date: rates.date, source: rates.source } : null;
         ui.regionLabel.textContent = currencySymbol(state.histCurrency) + (note ? ' · ' + note : '');
         ui.regionLabel.title = noteTitle;
         ui.regionLabel.style.cursor = noteTitle ? 'help' : '';
         renderPeriods();
         drawChart();
-        renderStats(ui.stats, hist, state.histCurrency);
+        renderStats(ui.stats, hist, state.histCurrency, state.rub);
       } catch (e) {
         if (e.status === 401 || e.status === 403) {
           ui.chart.replaceChildren(keyForm({ err: true, text: 'IsThereAnyDeal не принял ключ: ' + e.message + '. Нужен именно «API key» вашего приложения, а не Client ID или Client Secret из раздела OAuth.' }));
