@@ -1,0 +1,46 @@
+# Checks the Kaplya app (kaplya/) on a real Windows machine: the PowerShell helper,
+# the unit tests and the app itself. The parts that talk to Windows cannot be
+# tested anywhere else.
+name: Kaplya (Windows)
+
+on:
+  push:
+    paths:
+      - 'kaplya/**'
+      - '.github/workflows/kaplya-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaplya-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: kaplya
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Helper self-test (Windows PowerShell 5.1)
+        shell: cmd
+        run: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File src\helper\helper.ps1 -SelfTest
+
+      - name: Helper through the app's bridge
+        shell: cmd
+        run: |
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File tests\make-ocr-sample.ps1 -Path "%RUNNER_TEMP%\ocr-sample.png"
+          set "KAPLYA_OCR_SAMPLE=%RUNNER_TEMP%\ocr-sample.png"
+          node tests\helper.test.js

@@ -1,0 +1,54 @@
+{
+  "name": "kaplya",
+  "productName": "Kaplya",
+  "version": "0.1.0",
+  "description": "Капля: динамический островок для Windows",
+  "license": "MIT",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/unit/",
+    "test:helper": "node tests/helper.test.js",
+    "test:e2e": "node tests/e2e/run.js",
+    "icons": "node tools/make-icons.js",
+    "dist": "npx --yes electron-builder@26.18.0 --win nsis portable --x64 --publish never"
+  },
+  "dependencies": {
+    "jsqr": "1.4.0"
+  },
+  "devDependencies": {
+    "electron": "45.3.0"
+  },
+  "build": {
+    "appId": "io.github.kaplya.island",
+    "productName": "Kaplya",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "src/helper/**"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Kaplya-Setup-${version}.exe",
+      "shortcutName": "Капля"
+    },
+    "portable": {
+      "artifactName": "Kaplya-Portable-${version}.exe"
+    }
+  }
+}

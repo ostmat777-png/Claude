@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.tools/
+install.log
+tests/e2e/out/
