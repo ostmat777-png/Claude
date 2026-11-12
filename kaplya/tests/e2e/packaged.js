@@ -4,6 +4,10 @@
 //
 //   npm run dist                      (on Windows)
 //   node tests/e2e/packaged.js [path\to\Kaplya.exe]
+//
+// With a second argument it starts Electron on a copy of the sources instead,
+// which is how the app runs after run.bat:
+//   node tests/e2e/packaged.js path\to\electron.exe path\to\folder
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,9 +29,10 @@ function findExe() {
     console.log('No built program found. Build it first: npm run dist');
     process.exit(1);
   }
-  console.log('starting', exe);
+  const appDir = process.argv[3] || '';
+  console.log('starting', exe, appDir);
   const real = process.platform === 'win32';
-  const k = await launch({ exe, mock: !real });
+  const k = await launch({ exe, args: appDir ? [appDir] : [], mock: !real });
   let failed = false;
   try {
     const info = await k.page.evaluate(() => window.kaplya.invoke('app:init'));

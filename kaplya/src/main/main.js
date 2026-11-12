@@ -501,7 +501,7 @@ async function recognizeText(png) {
 
 function beginRecording(display, rect) {
   const s = store.get('settings.record');
-  rec = { pending: true, displayId: String(display.id), audio: s.audio, file: null, stream: null, startedAt: 0 };
+  rec = { pending: true, askedAt: Date.now(), displayId: String(display.id), audio: s.audio, file: null, stream: null, startedAt: 0 };
   // `rect` is in screen pixels, the same pixels the video frames are made of.
   // H.264 wants even sizes.
   const even = (v) => Math.max(2, Math.round(v / 2) * 2);
@@ -511,6 +511,12 @@ function beginRecording(display, rect) {
 
 function stopRecording() {
   if (rec) sendIsland('rec:stop');
+}
+
+function canExcludeFromCapture() {
+  if (process.platform !== 'win32') return true;
+  const build = Number(String(os.release()).split('.')[2]) || 0;
+  return build >= 19041;
 }
 
 function recordingEnded(error) {
@@ -540,7 +546,11 @@ async function runAction(id) {
     case 'ocr': return startCapture('ocr');
     case 'qr': return startCapture('qr');
     case 'color': return startCapture('color');
-    case 'record': return rec ? stopRecording() : startCapture('record');
+    case 'record':
+      // A recording that was asked for but never began (the page did not answer)
+      // must not block the next attempt for ever.
+      if (rec && rec.pending && Date.now() - rec.askedAt > 15000) rec = null;
+      return rec ? stopRecording() : startCapture('record');
     case 'screen': return fullScreenshot();
     case 'plain': {
       const text = await clipio.readText();
@@ -792,8 +802,10 @@ function registerIpc() {
     rec.stream.on('error', () => {});
     rec.pending = false;
     rec.startedAt = Date.now();
-    // Keep the island itself out of the video where Windows allows it.
-    if (island && !island.isDestroyed()) island.setContentProtection(true);
+    // Keep the island itself out of the video. Only where Windows can leave a window
+    // out of a capture (Windows 10 version 2004 and later); older versions would
+    // paint a black box over the whole window instead.
+    if (island && !island.isDestroyed() && canExcludeFromCapture()) island.setContentProtection(true);
     broadcast('rec:state', { recording: true, startedAt: rec.startedAt });
     refreshTray();
     return true;

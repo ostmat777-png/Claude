@@ -40,6 +40,8 @@ jobs:
       - name: run.bat on a computer without Node.js
         shell: pwsh
         run: |
+          npm install --no-save --no-audit --no-fund playwright-core@1.65.0
+          $node = (Get-Command node).Source
           $dir = Join-Path $env:RUNNER_TEMP 'Капля тест'
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item -Recurse -Force src, assets, tools, package.json, package-lock.json, run.bat $dir
@@ -52,6 +54,9 @@ jobs:
           }
           if (-not (Test-Path "$dir\.tools\node\node.exe")) { throw 'the private copy of Node.js is missing' }
           if (-not (Test-Path "$dir\node_modules\electron\dist\electron.exe")) { throw 'Electron is missing' }
+          # and the app really runs from that folder, helper included
+          & $node tests/e2e/packaged.js "$dir\node_modules\electron\dist\electron.exe" "$dir"
+          if ($LASTEXITCODE -ne 0) { throw 'the app did not start from that folder' }
 
       - name: Unit tests
         run: npm test
@@ -68,9 +73,7 @@ jobs:
           node tests\helper.test.js
 
       - name: The app itself
-        run: |
-          npm install --no-save --no-audit --no-fund playwright-core@1.65.0
-          node tests/e2e/run.js
+        run: node tests/e2e/run.js
 
       - name: Build the installer
         run: npm run dist
