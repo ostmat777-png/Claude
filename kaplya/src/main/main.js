@@ -205,9 +205,21 @@ function registerProtocol() {
 
 // ------------------------------------------------------------------ the island window
 
+// The widest tab is 720 points wide and the tallest about 600 high. With room for
+// the shadow that is the space the island needs at 100% size.
+const NEED_W = 760;
+const NEED_H = 660;
+
+/** The island's size factor: what the person chose, made smaller if the screen is too small for it. */
+function fitZoom(display, chosen) {
+  const want = clamp(Number(chosen) || 1, 0.8, 1.4);
+  const fit = Math.min(1, display.bounds.width / (NEED_W * want), display.bounds.height / (NEED_H * want));
+  return Math.max(0.5, want * fit);
+}
+
 function islandBounds() {
   const d = screen.getPrimaryDisplay();
-  zoom = clamp(Number(store.get('settings.scale')) || 1, 0.8, 1.4);
+  zoom = fitZoom(d, store.get('settings.scale'));
   const width = Math.min(d.bounds.width, Math.round(940 * zoom));
   const height = Math.min(d.bounds.height, Math.round(740 * zoom));
   return { x: d.bounds.x + Math.round((d.bounds.width - width) / 2), y: d.bounds.y, width, height };

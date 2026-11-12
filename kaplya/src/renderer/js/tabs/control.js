@@ -169,7 +169,8 @@ export default {
         h('button', { class: 'ghost', title: 'Параметры Wi-Fi в Windows', onclick: () => api.invoke('open:external', 'ms-settings:network-wifi') }, icon('external-link', 14)));
       const list = h('div', { class: 'net-list' });
       if (wifi && !wifi.available) {
-        const denied = wifi.reason === 'denied';
+        // "Denied" from a computer that has no Wi-Fi at all is not about permissions.
+        const denied = wifi.reason === 'denied' && radios.wifi !== null;
         list.append(h('div', { class: 'empty' }, icon('wifi-off', 26),
           denied ? 'Windows не показывает программам сети Wi-Fi, пока выключен доступ к местоположению.'
             : wifi.reason === 'not-windows' ? 'Сети Wi-Fi доступны только в Windows.'

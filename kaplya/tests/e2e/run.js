@@ -820,6 +820,30 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // A small screen (an old laptop, or a big one at 200% scaling): the island makes
+  // itself smaller, so that every tab is still whole.
+  await scenario('small screen: the island shrinks to fit', { args: ['--force-device-scale-factor=2.5'], data: withWeather.data }, async (k) => {
+    const d = await k.main(({ screen }) => screen.getPrimaryDisplay().bounds);
+    const zoom = await k.main(() => globalThis.__kaplyaTest.zoom());
+    assert.ok(d.width < 800, 'the test screen is small: ' + JSON.stringify(d));
+    assert.ok(zoom < 0.95 && zoom >= 0.5, 'the island is scaled down: ' + zoom);
+    const wb = await k.main(() => globalThis.__kaplyaTest.islandBounds());
+    assert.ok(wb.x >= d.x && wb.width <= d.width && wb.height <= d.height, 'the window is inside the screen');
+    for (const tab of ['home', 'clipboard', 'shelf', 'text', 'notes', 'weather', 'control', 'chat']) {
+      await k.open(tab);
+      const box = await k.page.locator('#island').boundingBox();
+      const vp = await k.page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+      assert.ok(box.x >= 0 && box.x + box.width <= vp.w + 0.5, `${tab}: fits in width: ${JSON.stringify(box)} in ${JSON.stringify(vp)}`);
+      assert.ok(box.y + box.height <= vp.h + 0.5, `${tab}: fits in height: ${JSON.stringify(box)} in ${JSON.stringify(vp)}`);
+    }
+    // and it still answers the mouse where it is drawn
+    await k.page.keyboard.press('Escape');
+    await k.leave();
+    await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 4000 });
+    await k.hover();
+    await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 4000 });
+  });
+
   // ------------------------------------------------------------------ settings
   await scenario('settings: changes reach the island at once', withWeather, async (k) => {
     await k.main(() => globalThis.__kaplyaTest.openSettings());
@@ -875,9 +899,11 @@ async function main() {
     await until(async () => (await k.main(() => globalThis.__kaplyaTest.store.get('settings.hotkeys.ocr'))) === '', 'hotkey removed');
     await until(async () => (await s.textContent('.status[data-hotkey="ocr"]')) === 'выключено', 'status shown');
 
-    // size
+    // size: what was chosen, unless the screen is too small for it
+    const disp = await k.main(({ screen }) => screen.getPrimaryDisplay().bounds);
+    const wantZoom = 1.2 * Math.min(1, disp.width / (760 * 1.2), disp.height / (660 * 1.2));
     await k.main(() => globalThis.__kaplyaTest.store.set('settings.scale', 1.2));
-    await until(async () => Math.abs((await k.main(() => globalThis.__kaplyaTest.zoom())) - 1.2) < 0.001, 'zoom');
+    await until(async () => Math.abs((await k.main(() => globalThis.__kaplyaTest.zoom())) - wantZoom) < 0.001, 'zoom');
     await k.hover();
     await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 4000 });
     assert.deepEqual(errors, [], 'errors in the settings page');

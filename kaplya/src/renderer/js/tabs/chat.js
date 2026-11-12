@@ -49,7 +49,8 @@ export default {
       const view = document.createElement('webview');
       view.setAttribute('partition', 'persist:chat');
       view.setAttribute('allowpopups', '');
-      view.setAttribute('src', service.url);
+      // Under test nothing is loaded from the internet: the frame stays empty.
+      view.setAttribute('src', app.test ? 'about:blank' : service.url);
       view.className = 'chat-frame';
       view.dataset.service = service.id;
       frames.set(service.id, view);
