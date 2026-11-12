@@ -26,7 +26,8 @@ class ClipWatch extends EventEmitter {
   /**
    * @param {object} deps
    * @param {object} deps.io  readText, writeText, types, readImagePng, writeImagePng, hasNative (see clipio.js)
-   * @param {() => Promise<number|null>} [deps.seq]  clipboard change counter, or null when unknown
+   * @param {() => Promise<number|{seq:number,secret:boolean}|null>} [deps.seq]  clipboard change counter
+   *        (optionally with "this content is marked secret"), or null when unknown
    * @param {(png: Buffer) => {width:number,height:number,thumb:string}|null} [deps.describeImage]
    */
   constructor(deps, opts = {}) {
@@ -74,18 +75,25 @@ class ClipWatch extends EventEmitter {
     if (this.busy) return;
     this.busy = true;
     try {
-      let seq = null;
+      let info = null;
       try {
-        seq = await this.seq();
+        info = await this.seq();
       } catch {
-        seq = null;
+        info = null;
       }
+      const seq = info && typeof info === 'object' ? info.seq : info;
+      const secret = info && typeof info === 'object' ? Boolean(info.secret) : null;
       if (seq !== null && seq !== undefined) {
         if (seq === this.lastSeq) return;
         this.lastSeq = seq;
-        await this.read(silent, true);
+        if (secret) {
+          // marked "do not keep" by the program that copied it
+          this.lastSig = null;
+          return;
+        }
+        await this.read(silent, true, secret === false);
       } else {
-        await this.read(silent, false);
+        await this.read(silent, false, false);
       }
     } catch {
       // a clipboard that cannot be read right now (another program holds it): next time
@@ -94,14 +102,17 @@ class ClipWatch extends EventEmitter {
     }
   }
 
-  /** @param {boolean} changed  true when we know for sure the clipboard has new content */
-  async read(silent, changed) {
+  /**
+   * @param {boolean} changed  true when we know for sure the clipboard has new content
+   * @param {boolean} cleared  true when we already know the content is not marked secret
+   */
+  async read(silent, changed, cleared) {
     const text = await this.io.readText();
     if (text.trim()) {
       const sig = 't:' + hash(Buffer.from(text, 'utf8'));
       if (sig === this.lastSig) return;
       this.lastSig = sig;
-      if (await this.isPrivate()) return;
+      if (!cleared && (await this.isPrivate())) return;
       this.push({ kind: classify(text), sig, text: text.length > 20000 ? text.slice(0, 20000) : text, size: text.length }, silent);
       return;
     }
@@ -121,7 +132,7 @@ class ClipWatch extends EventEmitter {
       const sig = 'i:' + hash(png);
       if (sig === this.lastSig) return;
       this.lastSig = sig;
-      if (await this.isPrivate()) return;
+      if (!cleared && (await this.isPrivate())) return;
       const info = this.describeImage(png);
       if (!info) return;
       const item = this.push({ kind: 'image', sig, text: '', width: info.width, height: info.height, thumb: info.thumb }, silent);

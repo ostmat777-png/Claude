@@ -127,6 +127,12 @@ async function main() {
       assert.strictEqual(typeof r, 'number');
       return r;
     });
+    await check('clip.info', async () => {
+      const r = await helper.call('clip.info');
+      assert.strictEqual(typeof r.seq, 'number');
+      assert.strictEqual(typeof r.secret, 'boolean');
+      return r;
+    });
     await check('apps.list', async () => {
       const r = await helper.call('apps.list', {}, 30000);
       assert.ok(Array.isArray(r.apps));

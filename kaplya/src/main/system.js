@@ -23,6 +23,7 @@ class SystemWatch extends EventEmitter {
     this.timers = [];
     this.busy = { media: false, sys: false };
     this.volumeHold = 0;
+    this.mediaSeen = false; // becomes true after the first look at the player
   }
 
   start() {
@@ -66,6 +67,8 @@ class SystemWatch extends EventEmitter {
   }
 
   applyMedia(raw) {
+    const first = !this.mediaSeen;
+    this.mediaSeen = true;
     if (!raw || (!raw.title && !raw.artist)) {
       if (this.media) {
         this.media = null;
@@ -119,7 +122,8 @@ class SystemWatch extends EventEmitter {
     this.media = next;
     if (stateChanged || coverChanged) {
       const cover = this.cover && this.cover.key === next.key ? this.cover.url : null;
-      this.emit('media', { ...next, cover }, { trackChanged });
+      // What was already playing when the app started is not news.
+      this.emit('media', { ...next, cover }, { trackChanged: trackChanged && !first });
     }
   }
 

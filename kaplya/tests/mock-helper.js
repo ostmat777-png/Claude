@@ -104,6 +104,7 @@ function run(cmd, a) {
     case 'ocr.langs': return { langs: [{ tag: 'ru', name: 'Русский' }, { tag: 'en-US', name: 'English (United States)' }] };
     case 'power': state.power.push(a.action); return true;
     case 'clip.seq': return null; // "unknown": the app falls back to reading the clipboard
+    case 'clip.info': return null;
     case 'apps.list': return { apps: [{ name: 'Калькулятор', id: 'Mock.Calculator' }, { name: 'Параметры', id: 'Mock.Settings' }, { name: 'Блокнот', id: 'Mock.Notepad' }] };
     // test controls
     case 'mock.set': Object.assign(state, a); return true;

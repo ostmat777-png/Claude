@@ -181,6 +181,14 @@ namespace Kaplya {
     [DllImport("user32.dll")] public static extern bool LockWorkStation();
     // Grows by one every time anything is copied: a cheap "did the clipboard change?".
     [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormat(string name);
+    [DllImport("user32.dll")] static extern bool IsClipboardFormatAvailable(uint format);
+
+    // True when the clipboard carries data in the named format.
+    public static bool ClipboardHas(string name) {
+      uint f = RegisterClipboardFormat(name);
+      return f != 0 && IsClipboardFormatAvailable(f);
+    }
     [DllImport("powrprof.dll")] public static extern bool SetSuspendState(bool hibernate, bool force, bool wakeupEventsDisabled);
 
     // "1|class|pid" when the foreground window covers its whole monitor exactly
@@ -587,6 +595,19 @@ function Invoke-ClipSeq($a) {
     return [long][Kaplya.Win]::GetClipboardSequenceNumber()
 }
 
+# Password managers mark what they copy with one of these formats, asking clipboard
+# tools not to keep it. "secret" tells the app to leave such content alone.
+$script:SecretFormats = @('ExcludeClipboardContentFromMonitorProcessing', 'Clipboard Viewer Ignore')
+
+function Invoke-ClipInfo($a) {
+    Initialize-Native
+    $secret = $false
+    foreach ($f in $script:SecretFormats) {
+        if ([Kaplya.Win]::ClipboardHas($f)) { $secret = $true }
+    }
+    return @{ seq = [long][Kaplya.Win]::GetClipboardSequenceNumber(); secret = $secret }
+}
+
 # Everything the Start menu knows, including Store apps that have no shortcut file.
 function Invoke-AppsList($a) {
     $list = @()
@@ -636,6 +657,7 @@ function Invoke-Cmd([string]$cmd, $a) {
         'ocr.langs' { return Invoke-OcrLangs $a }
         'power' { return Invoke-Power $a }
         'clip.seq' { return Invoke-ClipSeq $a }
+        'clip.info' { return Invoke-ClipInfo $a }
         'apps.list' { return Invoke-AppsList $a }
         default { throw "unknown command: $cmd" }
     }
@@ -643,10 +665,12 @@ function Invoke-Cmd([string]$cmd, $a) {
 
 if ($SelfTest) {
     $failed = 0
-    foreach ($c in @('ping', 'sys.poll', 'volume.get', 'media.get', 'media.sessions', 'radio.get', 'wifi.list', 'ocr.langs', 'clip.seq', 'apps.list')) {
+    foreach ($c in @('ping', 'sys.poll', 'volume.get', 'media.get', 'media.sessions', 'radio.get', 'wifi.list', 'ocr.langs', 'clip.seq', 'clip.info', 'apps.list')) {
         try {
             $r = Invoke-Cmd $c (New-Object PSObject)
-            [Console]::Out.WriteLine("OK   $c  " + (ConvertTo-AsciiJson @{ result = $r }))
+            $shown = ConvertTo-AsciiJson @{ result = $r }
+            if ($shown.Length -gt 400) { $shown = $shown.Substring(0, 400) + ' ... (' + $shown.Length + ' characters)' }
+            [Console]::Out.WriteLine("OK   $c  $shown")
         } catch {
             $failed++
             [Console]::Out.WriteLine("FAIL $c  " + (Get-ErrText $_))

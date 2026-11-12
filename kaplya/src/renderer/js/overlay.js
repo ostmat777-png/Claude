@@ -390,7 +390,11 @@ function startText(p) {
   entry.style.color = color;
   entry.dataset.size = String(sizeIndex);
   growEntry();
-  setTimeout(() => entry.focus(), 0);
+  entry.focus();
+  // once more after the click has finished, in case the click itself took the focus away
+  setTimeout(() => {
+    if (!entry.hidden) entry.focus();
+  }, 0);
 }
 
 function growEntry() {
@@ -541,6 +545,11 @@ canvas.addEventListener('pointerup', (e) => {
     draw();
   }
   return e;
+});
+
+// With the text tool the click must not pull the focus out of the field being typed in.
+canvas.addEventListener('mousedown', (e) => {
+  if (phase === 'annotate' && tool === 'text') e.preventDefault();
 });
 
 canvas.addEventListener('contextmenu', (e) => {

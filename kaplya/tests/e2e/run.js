@@ -152,11 +152,23 @@ async function main() {
 
   // ------------------------------------------------------------------ home
   await scenario('home: player, lyrics, volume, tools', withWeather, async (k) => {
+    // music that was already playing at start is not announced
+    await until(async () => (await k.page.locator('#pill-left img').count()) === 1, 'cover in the pill');
+    await sleep(600);
+    assert.equal(await k.mode(), 'pill');
+    // a new track is
+    await k.helper('media.cmd', { action: 'next' });
+    await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 6000 });
+    assert.equal(await text(k, '.toast-title'), 'Northern Lights');
+    assert.equal(await text(k, '.toast-text'), 'Aurora Line');
+    await k.helper('media.cmd', { action: 'prev' });
+    await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'Тёплый берег', 'toast for the track we returned to');
+    await k.helper('media.cmd', { action: 'seek', position: 42 });
     await k.open('home');
     await until(async () => (await text(k, '.player-title')) === 'Тёплый берег', 'track title');
     assert.equal(await text(k, '.player-artist'), 'Прибой');
     await until(async () => (await k.page.locator('.player-lyrics:not([hidden])').count()) === 1, 'lyrics');
-    assert.ok((await text(k, '.lyric.now')).length > 3);
+    await until(async () => /тёплого берега/.test(await text(k, '.lyric.now')), 'the line being sung at 0:42');
     assert.equal(await k.page.locator('.tools .tool').count(), 8);
     await k.shot('home');
 
@@ -534,8 +546,8 @@ async function main() {
     await ov.mouse.up();
     await ov.click('#toolbar button[data-tool="text"]');
     await ov.mouse.click(300, 350);
-    await ov.waitForSelector('#entry:not([hidden])');
-    await ov.keyboard.type('Важно!');
+    await ov.keyboard.type('Важно!'); // at once: the field must already have the focus
+    assert.equal(await ov.inputValue('#entry'), 'Важно!');
     await ov.keyboard.press('Enter');
     await ov.click('#toolbar button[data-tool="blur"]');
     await ov.mouse.move(480, 330);
@@ -812,6 +824,22 @@ async function main() {
       assert.match(await text(k, '.toast-text'), /привет из Windows/);
       await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
 
+      // what a password manager copies (marked "do not keep") stays out of the history
+      const ps = spawnSync('powershell.exe', ['-NoProfile', '-STA', '-Command',
+        "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.DataObject; " +
+        "$d.SetData('ExcludeClipboardContentFromMonitorProcessing', [byte[]](0,0,0,0)); $d.SetText('secret-password-123'); " +
+        "[System.Windows.Forms.Clipboard]::SetDataObject($d, $true)"], { encoding: 'utf8' });
+      assert.equal(ps.status, 0, 'could not put the marked text on the clipboard: ' + ps.stderr);
+      assert.equal(await clipText(k), 'secret-password-123');
+      await sleep(2000);
+      assert.equal(await k.mode(), 'pill', 'no toast for secret content');
+      assert.equal((await k.main(() => globalThis.__kaplyaTest.clips.list())).some((c) => /secret-password/.test(c.text)), false, 'secret content is not in the history');
+      // and ordinary copying still works after it
+      await setClip(k, 'обычный текст');
+      await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 8000 });
+      assert.match(await text(k, '.toast-text'), /обычный текст/);
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
       // the Start menu is searchable
       await k.main(() => globalThis.__kaplyaTest.openPalette());
       await k.page.waitForSelector('#island[data-mode="command"]');
@@ -838,10 +866,34 @@ async function main() {
       await until(async () => /Kaplya\s*12345/i.test(await clipText(k)), 'recognised text on the clipboard', 30000);
       await k.main(() => { globalThis.__probe.destroy(); });
 
+      // recording with the default setting (computer sound). This machine may have no
+      // sound device at all: the video must still be made.
+      await until(async () => (await k.main(() => globalThis.__kaplyaTest.state())).overlay === false, 'overlay closed');
+      const vdir = tmpDir('winvideo');
+      await k.main((_e, d) => globalThis.__kaplyaTest.store.set('settings.record.dir', d), vdir);
+      assert.equal(await k.main(() => globalThis.__kaplyaTest.store.get('settings.record.audio')), 'system');
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      const rov = await k.findPage('overlay.html');
+      await rov.waitForSelector('html[data-ready="true"]');
+      await closing(rov.keyboard.press('Enter'));
+      await until(async () => (await k.page.locator('.pill-stop').count()) === 1, 'recording pill', 20000);
+      await sleep(2500);
+      await k.page.click('.pill-stop');
+      await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'Запись сохранена', 'recording saved', 20000);
+      const vids = fs.readdirSync(vdir);
+      assert.equal(vids.length, 1);
+      assert.ok(fs.statSync(path.join(vdir, vids[0])).size > 3000, 'the video has content');
+      console.log('      recorded with default sound setting:', vids[0], fs.statSync(path.join(vdir, vids[0])).size, 'bytes');
+      fs.rmSync(vdir, { recursive: true, force: true });
+      await k.leave();
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 10000 });
+      await setClip(k, 'ещё текст для вкладки');
+      await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 8000 });
+
       // tabs that lean on Windows open without errors
       await k.page.waitForSelector('#island[data-mode="toast"]');
       await k.page.click('.toast-body');
-      await k.page.waitForSelector('.view-text:not([hidden])');
+      await k.page.waitForSelector('.view-clipboard:not([hidden])');
       await k.open('control');
       await sleep(1500);
       await k.open('home');
