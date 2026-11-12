@@ -179,6 +179,8 @@ namespace Kaplya {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
     [DllImport("user32.dll")] public static extern bool LockWorkStation();
+    // Grows by one every time anything is copied: a cheap "did the clipboard change?".
+    [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
     [DllImport("powrprof.dll")] public static extern bool SetSuspendState(bool hibernate, bool force, bool wakeupEventsDisabled);
 
     // "1|class|pid" when the foreground window covers its whole monitor exactly
@@ -452,7 +454,8 @@ function Get-WifiAdapter {
     $adT = Get-WinRtType 'Windows.Devices.WiFi.WiFiAdapter' 'Windows.Devices.WiFi'
     $accT = Get-WinRtType 'Windows.Devices.WiFi.WiFiAccessStatus' 'Windows.Devices.WiFi'
     $acc = Wait-Op ($adT::RequestAccessAsync()) $accT
-    if ([string]$acc -ne 'Allowed') { throw "access:$acc" }
+    $script:WifiAccess = [string]$acc
+    if ($script:WifiAccess -ne 'Allowed') { return $null }
     $listT = [System.Collections.Generic.IReadOnlyList`1].MakeGenericType($adT)
     $ads = @(Wait-Op ($adT::FindAllAdaptersAsync()) $listT)
     if ($ads.Count -eq 0) { return $null }
@@ -472,7 +475,11 @@ function Get-WifiConnectedSsid($ad) {
 
 function Invoke-WifiList($a) {
     $ad = Get-WifiAdapter
-    if ($null -eq $ad) { return @{ available = $false; connected = $null; networks = @() } }
+    if ($null -eq $ad) {
+        # reason "Denied...": Windows does not let this program see Wi-Fi networks
+        # (location access is off); "Allowed": there is no Wi-Fi adapter.
+        return @{ available = $false; reason = [string]$script:WifiAccess; connected = $null; networks = @() }
+    }
     if ($a.scan) {
         try { Wait-Action ($ad.ScanAsync()) 12000 } catch {}
     }
@@ -573,6 +580,22 @@ function Invoke-Ocr($a) {
     }
 }
 
+# ---------------------------------------------------------------- clipboard, installed apps
+
+function Invoke-ClipSeq($a) {
+    Initialize-Native
+    return [long][Kaplya.Win]::GetClipboardSequenceNumber()
+}
+
+# Everything the Start menu knows, including Store apps that have no shortcut file.
+function Invoke-AppsList($a) {
+    $list = @()
+    foreach ($app in @(Get-StartApps)) {
+        $list += @{ name = [string]$app.Name; id = [string]$app.AppID }
+    }
+    return @{ apps = @($list) }
+}
+
 # ---------------------------------------------------------------- power
 
 function Invoke-Power($a) {
@@ -612,13 +635,15 @@ function Invoke-Cmd([string]$cmd, $a) {
         'ocr' { return Invoke-Ocr $a }
         'ocr.langs' { return Invoke-OcrLangs $a }
         'power' { return Invoke-Power $a }
+        'clip.seq' { return Invoke-ClipSeq $a }
+        'apps.list' { return Invoke-AppsList $a }
         default { throw "unknown command: $cmd" }
     }
 }
 
 if ($SelfTest) {
     $failed = 0
-    foreach ($c in @('ping', 'sys.poll', 'volume.get', 'media.get', 'media.sessions', 'radio.get', 'wifi.list', 'ocr.langs')) {
+    foreach ($c in @('ping', 'sys.poll', 'volume.get', 'media.get', 'media.sessions', 'radio.get', 'wifi.list', 'ocr.langs', 'clip.seq', 'apps.list')) {
         try {
             $r = Invoke-Cmd $c (New-Object PSObject)
             [Console]::Out.WriteLine("OK   $c  " + (ConvertTo-AsciiJson @{ result = $r }))

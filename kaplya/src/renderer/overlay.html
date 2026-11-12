@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <title>Капля: выбор области</title>
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/overlay.css">
+</head>
+<body>
+  <canvas id="stage"></canvas>
+  <div id="hint"></div>
+  <div id="size" hidden></div>
+  <div id="loupe" hidden><canvas width="132" height="132"></canvas><span></span></div>
+  <div id="toolbar" hidden></div>
+  <textarea id="entry" hidden rows="1" spellcheck="false"></textarea>
+  <script src="vendor/jsqr.js"></script>
+  <script type="module" src="js/overlay.js"></script>
+</body>
+</html>

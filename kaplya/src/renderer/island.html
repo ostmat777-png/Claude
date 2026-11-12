@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <title>Капля</title>
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/island.css">
+  <link rel="stylesheet" href="css/tabs.css">
+</head>
+<body>
+  <div id="island" data-mode="pill">
+    <div id="pill" class="layer">
+      <span id="pill-left" class="pill-slot"></span>
+      <span id="pill-time"></span>
+      <span id="pill-weather"></span>
+      <span id="pill-right" class="pill-slot"></span>
+    </div>
+
+    <div id="toast" class="layer"></div>
+
+    <div id="panel" class="layer">
+      <nav id="rail" aria-label="Вкладки"></nav>
+      <div id="main">
+        <header id="head">
+          <span id="head-title"></span>
+          <span id="head-note"></span>
+          <span class="grow"></span>
+          <span id="head-actions"></span>
+          <button id="btn-pin" class="ghost" title="Не закрывать остров"></button>
+          <button id="btn-settings" class="ghost" title="Настройки"></button>
+        </header>
+        <div id="views"></div>
+        <div id="banner" hidden></div>
+      </div>
+    </div>
+
+    <div id="command" class="layer">
+      <div id="command-bar">
+        <span id="command-icon"></span>
+        <input id="command-input" type="text" autocomplete="off" spellcheck="false" placeholder="Программа, пример, команда или поиск">
+        <kbd>Esc</kbd>
+      </div>
+      <div id="command-list" role="listbox"></div>
+    </div>
+  </div>
+  <script type="module" src="js/island.js"></script>
+</body>
+</html>

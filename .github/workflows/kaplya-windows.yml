@@ -1,6 +1,5 @@
-# Checks the Kaplya app (kaplya/) on a real Windows machine: the PowerShell helper,
-# the unit tests and the app itself. The parts that talk to Windows cannot be
-# tested anywhere else.
+# Checks the Kaplya app (kaplya/) on a real Windows machine and builds the
+# installer. The parts that talk to Windows cannot be tested anywhere else.
 name: Kaplya (Windows)
 
 on:
@@ -20,7 +19,7 @@ concurrency:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: kaplya
@@ -31,8 +30,13 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install
-        run: npm ci --no-audit --no-fund
+      # The same file a person double-clicks: it installs everything.
+      - name: run.bat prepares the app
+        shell: cmd
+        run: call run.bat --check
+
+      - name: Unit tests
+        run: npm test
 
       - name: Helper self-test (Windows PowerShell 5.1)
         shell: cmd
@@ -44,3 +48,32 @@ jobs:
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File tests\make-ocr-sample.ps1 -Path "%RUNNER_TEMP%\ocr-sample.png"
           set "KAPLYA_OCR_SAMPLE=%RUNNER_TEMP%\ocr-sample.png"
           node tests\helper.test.js
+
+      - name: The app itself
+        run: |
+          npm install --no-save --no-audit --no-fund playwright-core@1.65.0
+          node tests/e2e/run.js
+
+      - name: Build the installer
+        run: npm run dist
+
+      - name: The built program starts
+        run: node tests/e2e/packaged.js
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaplya-test-screens
+          path: kaplya/tests/e2e/out
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kaplya-Windows
+          path: |
+            kaplya/dist/Kaplya-Setup-*.exe
+            kaplya/dist/Kaplya-Portable-*.exe
+          retention-days: 90

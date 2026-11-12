@@ -122,6 +122,17 @@ async function main() {
       assert.ok(Array.isArray(r.networks));
       return r;
     });
+    await check('clip.seq is a number', async () => {
+      const r = await helper.call('clip.seq');
+      assert.strictEqual(typeof r, 'number');
+      return r;
+    });
+    await check('apps.list', async () => {
+      const r = await helper.call('apps.list', {}, 30000);
+      assert.ok(Array.isArray(r.apps));
+      for (const a of r.apps) assert.ok(typeof a.name === 'string' && typeof a.id === 'string');
+      return r.apps.length + ' apps, e.g. ' + JSON.stringify(r.apps.slice(0, 3));
+    });
     await check('ocr.langs', async () => {
       const r = await helper.call('ocr.langs', {}, 30000);
       assert.ok(Array.isArray(r.langs));
