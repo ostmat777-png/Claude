@@ -70,6 +70,8 @@ const closing = (promise) => promise.catch((err) => {
 });
 const text = (k, sel) => k.page.textContent(sel);
 const tmpDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), 'kaplya-' + name + '-'));
+// A PowerShell script as one command-line argument that needs no quoting at all.
+const encodePs = (script) => Buffer.from(script, 'utf16le').toString('base64');
 
 async function main() {
   // ------------------------------------------------------------------ the shape and its states
@@ -736,6 +738,88 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  // Most laptops run Windows at 125-150% scaling: the picture has more pixels than
+  // the screen has "points". Selections, drawings and videos must come out in real pixels.
+  await scenario('capture: at 150% display scaling', () => {
+    const dir = tmpDir('scaled');
+    return {
+      args: ['--force-device-scale-factor=1.5'],
+      data: { settings: { screenshots: { dir, save: true }, record: { dir, format: 'mp4', audio: 'none', fps: 30 } } },
+    };
+  }, async (k) => {
+    const dir = await k.main(() => globalThis.__kaplyaTest.store.get('settings.screenshots.dir'));
+    const d = await k.main(({ screen }) => screen.getPrimaryDisplay());
+    assert.equal(d.scaleFactor, 1.5);
+    // the island still opens under the cursor
+    await k.open('home');
+    assert.equal(await k.page.locator('.tools .tool').count(), 8);
+    await k.page.keyboard.press('Escape');
+    await k.leave();
+
+    await k.main(() => { globalThis.__kaplyaTest.runAction('region'); });
+    let ov = await k.findPage('overlay.html');
+    await ov.waitForSelector('html[data-ready="true"]');
+    const st0 = await ov.evaluate(() => window.__overlay.state());
+    assert.equal(st0.W, Math.round(d.size.width * 1.5), 'the frozen picture is in real pixels');
+    assert.ok(Math.abs(st0.k - 1.5) < 0.01, 'one point is 1.5 pixels: ' + st0.k);
+    await ov.mouse.move(100, 100);
+    await ov.mouse.down();
+    await ov.mouse.move(300, 200, { steps: 3 });
+    await ov.mouse.move(500, 300, { steps: 3 });
+    await ov.mouse.up();
+    await ov.waitForSelector('#toolbar:not([hidden])');
+    assert.equal(await ov.textContent('#size'), `${Math.round(400 * st0.k)} × ${Math.round(200 * st0.k)}`);
+    await ov.mouse.move(150, 150);
+    await ov.mouse.down();
+    await ov.mouse.move(400, 250, { steps: 5 });
+    await ov.mouse.up();
+    await closing(ov.keyboard.press('Enter'));
+    await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 8000 });
+    assert.deepEqual(await clipImageSize(k), { width: Math.round(400 * st0.k), height: Math.round(200 * st0.k) });
+    await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+    // colour: the pixel under the cursor, not one 1.5 times further
+    await k.main(async ({ BrowserWindow, screen }) => {
+      const b = screen.getPrimaryDisplay().bounds;
+      const win = new BrowserWindow({ x: b.x + 300, y: b.y + 300, width: 200, height: 200, frame: false, show: false, backgroundColor: '#22aa44', alwaysOnTop: true });
+      await win.loadURL('data:text/html,' + encodeURIComponent('<body style="margin:0;background:#22aa44"></body>'));
+      win.showInactive();
+      globalThis.__probe = win;
+    });
+    await sleep(900);
+    await k.main(() => { globalThis.__kaplyaTest.runAction('color'); });
+    ov = await k.findPage('overlay.html');
+    await ov.waitForSelector('html[data-ready="true"]');
+    await ov.mouse.move(400, 400);
+    await ov.waitForSelector('#loupe:not([hidden])');
+    assert.equal(await ov.textContent('#loupe span'), '#22AA44');
+    await ov.mouse.move(290, 400); // just left of the green square
+    assert.notEqual(await ov.textContent('#loupe span'), '#22AA44');
+    await closing(ov.mouse.click(400, 400));
+    await until(async () => (await clipText(k)) === '#22aa44', 'colour on the clipboard');
+    await until(async () => (await k.main(() => globalThis.__kaplyaTest.state())).overlay === false, 'overlay closed');
+    await k.main(() => { globalThis.__probe.destroy(); });
+
+    // a recorded region is as big as it was selected, in real pixels
+    await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+    ov = await k.findPage('overlay.html');
+    await ov.waitForSelector('html[data-ready="true"]');
+    await ov.mouse.move(100, 100);
+    await ov.mouse.down();
+    await ov.mouse.move(420, 300, { steps: 4 });
+    await closing(ov.mouse.up());
+    await until(async () => (await k.page.locator('.pill-stop').count()) === 1, 'recording pill', 15000);
+    await sleep(2200);
+    await k.page.click('.pill-stop');
+    await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'Запись сохранена', 'recording saved', 15000);
+    const video = fs.readdirSync(dir).find((f) => /\.(mp4|webm)$/.test(f));
+    assert.ok(video, 'a video file');
+    const r = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path.join(dir, video)], { encoding: 'utf8' });
+    const even = (v) => Math.round(v / 2) * 2;
+    if (r.status === 0) assert.equal(r.stdout.trim(), `${even(320 * st0.k)},${even(200 * st0.k)}`, 'video size in real pixels');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   // ------------------------------------------------------------------ settings
   await scenario('settings: changes reach the island at once', withWeather, async (k) => {
     await k.main(() => globalThis.__kaplyaTest.openSettings());
@@ -799,6 +883,20 @@ async function main() {
     assert.deepEqual(errors, [], 'errors in the settings page');
   });
 
+  await scenario('first start: the island says where it is, once', { env: { KAPLYA_TEST_WELCOME: '1' } }, async (k) => {
+    await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 6000 });
+    assert.equal(await text(k, '.toast-title'), 'Капля здесь');
+    assert.equal(await k.main(() => globalThis.__kaplyaTest.store.get('welcomed')), true);
+    // it stays long enough to be read
+    await sleep(3000);
+    assert.equal(await k.mode(), 'toast');
+    // and doing what it says works: hovering opens the island
+    await k.hover();
+    await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 3000 });
+    await k.leave();
+    await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 3000 });
+  });
+
   // ------------------------------------------------------------------ persistence and bad data
   await scenario('store: a broken settings file does not stop the app', () => ({ data: { settings: { scale: 'huge', accent: 42, weather: null, home: { tools: 'x' } }, notes: 'oops', tab: 'nonsense' } }), async (k) => {
     assert.equal(await k.mode(), 'pill');
@@ -806,6 +904,99 @@ async function main() {
     assert.equal(await text(k, '#head-title'), 'Главная');
     for (const tab of ['clipboard', 'shelf', 'text', 'notes', 'weather', 'control']) await k.open(tab);
   });
+
+  // ------------------------------------------------------------------ the real mouse and a real full-screen window (Windows only)
+  if (isWin) {
+    // Moves the real cursor (and clicks) the way a person's hand would.
+    const realMouse = (x, y, click) => {
+      const script = "Add-Type -Namespace K -Name M -MemberDefinition '" +
+        '[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); ' +
+        '[DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, System.UIntPtr e);' + "'; " +
+        `[K.M]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}) | Out-Null; Start-Sleep -Milliseconds 150; ` +
+        (click ? '[K.M]::mouse_event(2,0,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 70; [K.M]::mouse_event(4,0,0,0,[UIntPtr]::Zero); ' : '') +
+        "'done'";
+      const r = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', encodePs(script)], { encoding: 'utf8' });
+      assert.equal(r.status, 0, 'could not move the mouse: ' + r.stderr);
+    };
+
+    await scenario('windows: the real mouse opens the island, and clicks pass through around it', {}, async (k) => {
+      const d = await k.main(({ screen }) => screen.getPrimaryDisplay());
+      const sf = d.scaleFactor;
+      const b = await k.main(() => globalThis.__kaplyaTest.islandBounds());
+      // from here on the app looks at the real cursor
+      await k.main(() => globalThis.__kaplyaTest.setCursor(null));
+      realMouse((b.x + 30) * sf, (b.y + b.height - 40) * sf, false);
+      await until(async () => (await k.main(() => globalThis.__kaplyaTest.state())).hover === false, 'cursor away from the island');
+      assert.equal(await k.mode(), 'pill');
+
+      // A window under the transparent part of the island's window. A click there
+      // must reach it, as if the island were not there.
+      await k.main(async ({ BrowserWindow }, pos) => {
+        const win = new BrowserWindow({ x: pos.x, y: pos.y, width: 260, height: 160, frame: false, show: false, backgroundColor: '#224466' });
+        await win.loadURL('data:text/html,' + encodeURIComponent('<body style="margin:0;height:100vh;background:#246"><script>let n=0;document.title="clicks:0";addEventListener("mousedown",()=>{document.title="clicks:"+(++n)})</script></body>'));
+        win.show();
+        globalThis.__probe = win;
+      }, { x: b.x + 60, y: b.y + 320 });
+      await sleep(800);
+      realMouse((b.x + 60 + 130) * sf, (b.y + 320 + 80) * sf, true);
+      await until(async () => (await k.main(() => globalThis.__probe.getTitle())) === 'clicks:1', 'the click to pass through the island window', 8000);
+
+      // The cursor comes to the pill: the island opens by itself.
+      realMouse((b.x + b.width / 2) * sf, (b.y + 22) * sf, false);
+      await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 8000 });
+      await k.settle();
+      assert.equal((await k.main(() => globalThis.__kaplyaTest.state())).hover, true);
+
+      // A real click on a real button: the pin.
+      const pin = await k.page.locator('#btn-pin').boundingBox();
+      realMouse((b.x + pin.x + pin.width / 2) * sf, (b.y + pin.y + pin.height / 2) * sf, true);
+      await until(async () => (await k.page.getAttribute('#btn-pin', 'class')).includes('on'), 'the pin to take a real click', 8000);
+      // pinned: the cursor leaves, the island stays
+      realMouse((b.x + 30) * sf, (b.y + b.height - 40) * sf, false);
+      await sleep(1200);
+      assert.equal(await k.mode(), 'open');
+      // unpin with another real click, leave: it closes
+      realMouse((b.x + pin.x + pin.width / 2) * sf, (b.y + pin.y + pin.height / 2) * sf, true);
+      await until(async () => !(await k.page.getAttribute('#btn-pin', 'class')).includes('on'), 'unpinned', 8000);
+      realMouse((b.x + 30) * sf, (b.y + b.height - 40) * sf, false);
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+      // and around the collapsed pill clicks pass through again
+      realMouse((b.x + 60 + 130) * sf, (b.y + 320 + 80) * sf, true);
+      await until(async () => (await k.main(() => globalThis.__probe.getTitle())) === 'clicks:2', 'click-through after closing', 8000);
+      await k.main(() => { globalThis.__probe.destroy(); });
+    });
+
+    await scenario('windows: a real full-screen window hides the island', { mock: false }, async (k) => {
+      await until(async () => (await k.helper('ping')).windows === true, 'helper to answer', 30000);
+      await k.leave();
+      assert.equal(await k.page.getAttribute('#island', 'data-hidden'), 'false');
+      // Another program opens a borderless window over the whole screen for a few seconds.
+      const { spawn } = require('node:child_process');
+      const script = "Add-Type -AssemblyName System.Windows.Forms; " +
+        "Add-Type -Namespace K -Name W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern System.IntPtr GetForegroundWindow(); [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(System.IntPtr h);'; " +
+        "$f = New-Object System.Windows.Forms.Form; $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true; $f.BackColor = 'Black'; " +
+        "$t = New-Object System.Windows.Forms.Timer; $t.Interval = 1500; $script:n = 0; " +
+        "$t.Add_Tick({ $script:n++; if ($script:n -eq 1) { [K.W]::SetForegroundWindow($f.Handle) | Out-Null; $f.Activate() } " +
+        "if ($script:n -eq 2) { [Console]::Out.WriteLine('foreground:' + ([K.W]::GetForegroundWindow() -eq $f.Handle)); [Console]::Out.Flush() } " +
+        "if ($script:n -ge 7) { $f.Close() } }); $t.Start(); [System.Windows.Forms.Application]::Run($f)";
+      const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-EncodedCommand', encodePs(script)], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      child.stdout.on('data', (c) => { out += c; });
+      const ended = new Promise((resolve) => child.on('exit', resolve));
+      await until(() => /foreground:/.test(out), 'the full-screen window to appear', 20000);
+      if (/foreground:True/.test(out)) {
+        await until(async () => (await k.page.getAttribute('#island', 'data-hidden')) === 'true', 'the island to hide behind the full-screen window', 8000);
+        await ended;
+        await until(async () => (await k.page.getAttribute('#island', 'data-hidden')) === 'false', 'the island to come back', 10000);
+        console.log('      full-screen window: island hid and came back');
+      } else {
+        // Windows did not give the test window the foreground; nothing to conclude.
+        await ended;
+        console.log('      SKIPPED: the test window did not become the foreground window');
+      }
+    });
+  }
 
   // ------------------------------------------------------------------ the real helper (Windows only)
   if (isWin) {

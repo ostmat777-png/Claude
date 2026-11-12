@@ -43,6 +43,7 @@ const DEFAULTS = {
     ocrLang: '',
   },
   tab: 'home',
+  welcomed: false,
   notes: [{ id: 'n1', text: '' }],
   activeNote: 'n1',
   reminders: [],

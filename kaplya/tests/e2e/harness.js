@@ -34,6 +34,7 @@ async function findPage(app, part, timeoutMs = 20000) {
  * @param {object} [opts.env]    extra environment variables
  * @param {boolean} [opts.mock]  false = use the real helper (Windows only)
  * @param {string} [opts.exe]    start this built program instead of the sources
+ * @param {string[]} [opts.args] extra command-line switches for the program
  */
 async function launch(opts = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'kaplya-test-'));
@@ -49,6 +50,7 @@ async function launch(opts = {}) {
   delete env.NODE_OPTIONS;
   const args = opts.exe ? [] : [ROOT];
   if (process.platform === 'linux') args.push('--no-sandbox');
+  args.push(...(opts.args || []));
   const app = await electronDriver.launch({ args, env, executablePath: opts.exe || require('electron') });
   const page = await findPage(app, 'island.html');
   await page.waitForSelector('html[data-ready="true"]', { timeout: 20000 });

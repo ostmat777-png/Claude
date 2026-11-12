@@ -35,6 +35,24 @@ jobs:
         shell: cmd
         run: call run.bat --check
 
+      # A fresh computer: no Node.js at all, and a folder with spaces and Russian
+      # letters in its name. run.bat must bring its own Node.js and still work.
+      - name: run.bat on a computer without Node.js
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'Капля тест'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item -Recurse -Force src, assets, tools, package.json, package-lock.json, run.bat $dir
+          $env:PATH = ($env:PATH -split ';' | Where-Object { $_ -and (-not (Test-Path (Join-Path $_ 'node.exe'))) }) -join ';'
+          if (Get-Command node -ErrorAction SilentlyContinue) { throw 'node is still on PATH' }
+          & "$dir\run.bat" --check
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path "$dir\install.log") { Get-Content "$dir\install.log" -Tail 40 }
+            throw 'run.bat failed'
+          }
+          if (-not (Test-Path "$dir\.tools\node\node.exe")) { throw 'the private copy of Node.js is missing' }
+          if (-not (Test-Path "$dir\node_modules\electron\dist\electron.exe")) { throw 'Electron is missing' }
+
       - name: Unit tests
         run: npm test
 

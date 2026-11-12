@@ -404,7 +404,7 @@ function showToast(t) {
 function armToast(ms) {
   clearTimeout(toastTimer);
   if (!activeToast || (hover && mode === 'toast')) return;
-  const life = ms || (activeToast.sticky ? 90000 : activeToast.quiet ? 2400 : 4600);
+  const life = ms || activeToast.hold || (activeToast.sticky ? 90000 : activeToast.quiet ? 2400 : 4600);
   toastTimer = setTimeout(endToast, life);
 }
 
@@ -686,6 +686,7 @@ async function boot() {
   layout();
   requestAnimationFrame(() => requestAnimationFrame(() => el.island.classList.remove('booting')));
   document.documentElement.dataset.ready = 'true';
+  api.invoke('island:ready');
 }
 
 boot();

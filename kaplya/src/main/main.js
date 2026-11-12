@@ -22,6 +22,9 @@ const { Wifi } = require('./wifi.js');
 const { Launcher } = require('./launcher.js');
 
 const TEST = process.env.KAPLYA_TEST === '1';
+// Tests start from an empty profile every time; the first-start greeting would get
+// in their way, so it is shown only to the test that asks for it.
+const TEST_QUIET = TEST && process.env.KAPLYA_TEST_WELCOME !== '1';
 const SRC = path.join(__dirname, '..');
 const RENDERER_DIR = path.join(SRC, 'renderer');
 const SHARED_DIR = path.join(SRC, 'shared');
@@ -700,6 +703,13 @@ function registerIpc() {
   });
 
   // --- island geometry and focus
+  // The page is up: on the very first start, say where the island is.
+  handle('island:ready', () => {
+    if (store.get('welcomed') || TEST_QUIET) return false;
+    store.set('welcomed', true);
+    setTimeout(() => toast({ type: 'info', icon: 'droplet', title: 'Капля здесь', text: 'Наведите курсор, чтобы раскрыть остров', hold: 9000, quiet: true }), 900);
+    return true;
+  });
   listen('island:rects', (rects) => {
     hitRects = Array.isArray(rects) ? rects.filter((r) => r && [r.x, r.y, r.w, r.h].every(Number.isFinite)) : [];
     tickCursor();
@@ -977,8 +987,44 @@ function setupSessions() {
   // Chat sites see an ordinary Chrome; some refuse to sign in to anything else.
   const chat = session.fromPartition(CHAT_PARTITION);
   chat.setUserAgent(own.getUserAgent().replace(/\s(Kaplya|kaplya|Electron)\/\S+/g, ''));
-  chat.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(['clipboard-sanitized-write', 'clipboard-read', 'media', 'fullscreen'].includes(permission));
+  // Chat sites are ordinary web pages. They may copy to the clipboard and go full
+  // screen; the microphone and camera only after the person says yes, per site;
+  // nothing else (reading the clipboard, location, notifications).
+  const mediaAllowed = new Map(); // origin -> true | false, until the app is closed
+  const originOf = (url) => {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return '';
+    }
+  };
+  chat.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return callback(true);
+    if (permission !== 'media') return callback(false);
+    const origin = originOf((details && details.requestingUrl) || wc.getURL());
+    if (!/^https:/.test(origin)) return callback(false);
+    if (mediaAllowed.has(origin)) return callback(mediaAllowed.get(origin));
+    const what = (details && details.mediaTypes) || [];
+    const names = [what.includes('audio') ? 'микрофону' : '', what.includes('video') ? 'камере' : ''].filter(Boolean).join(' и ') || 'микрофону';
+    return dialog.showMessageBox({
+      type: 'question',
+      title: 'Капля',
+      message: `Сайт ${origin.replace(/^https:\/\//, '')} просит доступ к ${names}.`,
+      detail: 'Разрешение действует, пока Капля не закрыта.',
+      buttons: ['Разрешить', 'Запретить'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    }).then((res) => {
+      const ok = res.response === 0;
+      mediaAllowed.set(origin, ok);
+      callback(ok);
+    }).catch(() => callback(false));
+  });
+  chat.setPermissionCheckHandler((_wc, permission, origin) => {
+    if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return true;
+    if (permission === 'media') return mediaAllowed.get(originOf(origin)) === true;
+    return false;
   });
 }
 
