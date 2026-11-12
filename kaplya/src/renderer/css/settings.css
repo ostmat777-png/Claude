@@ -260,6 +260,21 @@ body {
   background: var(--card-2);
 }
 
+.obs-status {
+  min-width: 0;
+  max-width: 300px;
+  text-align: right;
+}
+
+.obs-help {
+  line-height: 1.5;
+}
+
+.obs-help b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .about p {
   margin: 0 0 10px;
   color: var(--muted);

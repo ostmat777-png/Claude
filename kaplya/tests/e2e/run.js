@@ -14,6 +14,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { launch, sleep, OUT } = require('./harness.js');
+const { startMockObs } = require('../mock-obs.js');
 
 const filter = process.argv[2] || '';
 const isWin = process.platform === 'win32';
@@ -846,6 +847,90 @@ async function main() {
     await k.hover();
     await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 4000 });
   });
+
+  // ------------------------------------------------------------------ recording through OBS Studio
+  {
+    // a stand-in OBS with a password, listening on a free port
+    const mock = await startMockObs({ password: 'obs-pass' });
+    await scenario('obs: the record button drives OBS Studio', { data: { settings: { record: { engine: 'builtin', obs: { host: '127.0.0.1', port: mock.port, launch: false } } } } }, async (k) => {
+      // choose OBS in the settings and give the password
+      await k.main(() => globalThis.__kaplyaTest.openSettings('capture'));
+      const s = await k.findPage('settings.html');
+      await s.waitForSelector('html[data-ready="true"]');
+      assert.equal(await s.locator('.obs-status').count(), 0, 'no OBS rows while the built-in recorder is chosen');
+      await s.locator('.segment button', { hasText: 'OBS Studio' }).click();
+      await s.waitForSelector('.obs-status');
+      await until(async () => /OBS просит пароль/.test(await s.textContent('.obs-status')), 'OBS asks for a password');
+      await s.fill('input[type="password"]', 'obs-pass');
+      await s.click('button[data-act="obs-password"]');
+      await until(async () => /OBS 31\.0\.2 отвечает/.test(await s.textContent('.obs-status')), 'OBS answers with the right password');
+      await s.screenshot({ path: path.join(OUT, 'settings-obs.png') });
+      // the password is not kept readable, and pages never get it
+      const stored = await k.main(() => globalThis.__kaplyaTest.store.get('obsSecret'));
+      assert.ok(stored && !stored.includes('obs-pass'), 'stored form: ' + stored);
+      assert.equal((await s.evaluate(() => window.kaplya.invoke('app:init'))).data.obsSecret, undefined);
+      assert.equal(await s.evaluate(() => window.kaplya.invoke('store:get', 'obsSecret')), undefined);
+
+      // record: no area picker, OBS starts recording, the pill shows it
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      await until(() => mock.state.recording, 'OBS to start recording');
+      await until(async () => (await k.page.locator('.pill-stop').count()) === 1, 'recording pill');
+      assert.equal((await k.main(() => globalThis.__kaplyaTest.state())).overlay, false);
+      await sleep(1200);
+      assert.match(await text(k, '#pill-time'), /^0:0[1-9]$/);
+      await until(async () => /идёт запись/.test(await s.textContent('.obs-status')), 'settings show the recording');
+
+      // stop from the pill: OBS stops, the toast names the file OBS saved
+      await k.page.click('.pill-stop');
+      await until(() => !mock.state.recording, 'OBS to stop recording');
+      await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'Запись сохранена', 'saved toast');
+      assert.match(await text(k, '.toast-text'), /OBS · 2026-11-12 14-00-00\.mkv/);
+      await k.settle(300);
+      await k.shot('toast-obs');
+      await k.leave();
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+      // started in OBS itself: the island follows; the same hotkey action stops it
+      mock.externalStart();
+      await until(async () => (await k.page.locator('.pill-stop').count()) === 1, 'pill follows OBS');
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      await until(() => !mock.state.recording, 'OBS to stop on the second press');
+      await until(async () => (await k.page.locator('.pill-stop').count()) === 0, 'pill back to normal');
+      await k.leave();
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+      // a wrong password is said plainly, with a way to the settings
+      await s.fill('input[type="password"]', 'nope');
+      await s.click('button[data-act="obs-password"]');
+      await until(async () => /Пароль не подошёл/.test(await s.textContent('.obs-status')), 'wrong password shown');
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'OBS: пароль не подошёл', 'wrong-password toast');
+      assert.equal(await k.page.locator('.toast-actions button[title="Открыть настройки"]').count(), 1);
+      assert.equal(mock.state.recording, false);
+      await k.page.click('#toast');
+      await k.leave();
+      await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+      // OBS closed: said plainly too
+      await s.fill('input[type="password"]', 'obs-pass');
+      await s.click('button[data-act="obs-password"]');
+      await until(async () => /отвечает/.test(await s.textContent('.obs-status')), 'connected again');
+      await mock.close();
+      await until(async () => (await k.main(() => globalThis.__kaplyaTest.obs.state.connected)) === false, 'the island to notice OBS is gone');
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      await until(async () => (await text(k, '.toast-title').catch(() => '')) === 'OBS не отвечает', 'unreachable toast');
+      await k.page.click('#toast');
+
+      // back to the built-in recorder: the area picker again
+      await s.locator('.segment button', { hasText: 'Встроенная' }).click();
+      await until(async () => (await k.main(() => globalThis.__kaplyaTest.store.get('settings.record.engine'))) === 'builtin', 'engine switched back');
+      await k.main(() => { globalThis.__kaplyaTest.runAction('record'); });
+      const ov = await k.findPage('overlay.html');
+      await ov.waitForSelector('html[data-ready="true"]');
+      await closing(ov.keyboard.press('Escape'));
+    });
+    await mock.close().catch(() => {});
+  }
 
   // ------------------------------------------------------------------ settings
   await scenario('settings: changes reach the island at once', withWeather, async (k) => {

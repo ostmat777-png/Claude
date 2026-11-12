@@ -477,6 +477,13 @@ function paintToast(t) {
       },
     }));
   }
+  if (t.settings) {
+    // an error that is fixed in the settings: one click takes you there
+    actions.push(round('settings', 'Открыть настройки', () => {
+      api.invoke('open:settings', t.settings);
+      endToast();
+    }, true));
+  }
   if (t.sticky) actions.push(round('check', 'Понятно', () => endToast(), true));
 
   clear(el.toast, art,
@@ -667,7 +674,7 @@ async function boot() {
   app.platform = init.platform;
   app.version = init.version;
   app.test = init.test;
-  if (init.recording) app.recording = { startedAt: Date.now() };
+  if (init.recording) app.recording = { startedAt: init.recordingSince || Date.now() };
 
   applyLook(app.settings, app.sys.dark);
   buildRail();

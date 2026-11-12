@@ -30,7 +30,14 @@ const DEFAULTS = {
       record: 'Ctrl+Alt+R',
     },
     screenshots: { dir: '', save: true },
-    record: { dir: '', format: 'mp4', audio: 'system', fps: 30 },
+    record: {
+      engine: 'builtin', // builtin | obs
+      dir: '',
+      format: 'mp4',
+      audio: 'system',
+      fps: 30,
+      obs: { host: '127.0.0.1', port: 4455, launch: true },
+    },
     home: {
       tools: ['region', 'screen', 'ocr', 'qr', 'color', 'plain', 'record', 'command'],
       showClipboard: true,
@@ -44,6 +51,7 @@ const DEFAULTS = {
   },
   tab: 'home',
   welcomed: false,
+  obsSecret: '', // the OBS WebSocket password, encrypted (see secret.js)
   notes: [{ id: 'n1', text: '' }],
   activeNote: 'n1',
   reminders: [],

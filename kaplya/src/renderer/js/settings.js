@@ -207,19 +207,94 @@ function capture() {
   });
   langs.addEventListener('change', () => save('settings.ocrLang', langs.value));
 
+  const engine = getPath('settings.record.engine') === 'obs' ? 'obs' : 'builtin';
+  const builtin = group(
+    segmentRow('settings.record.format', 'Формат видео', 'MP4 открывается везде', [['mp4', 'MP4'], ['webm', 'WebM']]),
+    segmentRow('settings.record.audio', 'Звук в записи', 'Звук компьютера: то, что вы слышите в колонках', [['none', 'Без звука'], ['system', 'Компьютер'], ['mic', 'Микрофон'], ['both', 'Оба']]),
+    segmentRow('settings.record.fps', 'Кадров в секунду', null, [[30, '30'], [60, '60']]),
+    folderRow('settings.record.dir', 'Папка записей', 'Видео\\Kaplya', 'video'),
+  );
+
   return [
     group(
       toggleRow('settings.screenshots.save', 'Сохранять скриншоты в папку', 'В буфер обмена снимок попадает всегда'),
       folderRow('settings.screenshots.dir', 'Папка скриншотов', 'Изображения\\Kaplya', 'picture'),
     ),
-    group(
-      segmentRow('settings.record.format', 'Формат видео', 'MP4 открывается везде', [['mp4', 'MP4'], ['webm', 'WebM']]),
-      segmentRow('settings.record.audio', 'Звук в записи', 'Звук компьютера: то, что вы слышите в колонках', [['none', 'Без звука'], ['system', 'Компьютер'], ['mic', 'Микрофон'], ['both', 'Оба']]),
-      segmentRow('settings.record.fps', 'Кадров в секунду', null, [[30, '30'], [60, '60']]),
-      folderRow('settings.record.dir', 'Папка записей', 'Видео\\Kaplya', 'video'),
-    ),
+    group(row('Чем записывать экран',
+      'Встроенная запись ничего не требует. OBS Studio записывает сама, со своими сценами, звуком и качеством, а остров ею управляет',
+      segment([['builtin', 'Встроенная'], ['obs', 'OBS Studio']], engine, (v) => {
+        save('settings.record.engine', v);
+        render();
+      }))),
+    engine === 'obs' ? obsGroup() : builtin,
     group(row('Язык распознавания текста', 'Список берётся из языковых пакетов Windows. Чтобы добавить язык: Параметры → Время и язык → Язык', langs)),
   ];
+}
+
+const OBS_PROBLEMS = {
+  unreachable: 'OBS не отвечает: она закрыта или сервер WebSocket в ней выключен',
+  auth: 'Пароль не подошёл',
+  timeout: 'OBS не ответила вовремя',
+  closed: 'Связь оборвалась',
+};
+
+// Everything needed to let the island drive OBS Studio: where it listens, its
+// password, and whether the connection works right now.
+function obsGroup() {
+  const status = h('span', { class: 'status obs-status', text: '…' });
+  const say = (res) => {
+    status.className = 'status obs-status ' + (res.ok ? 'ok' : 'busy');
+    status.textContent = res.ok ? `OBS ${res.version || ''} отвечает`.replace('  ', ' ')
+      : res.error === 'auth' && res.hasPassword === false ? 'OBS просит пароль: введите его ниже'
+        : OBS_PROBLEMS[res.error] || 'Не получилось связаться с OBS';
+  };
+  const check = async () => {
+    status.className = 'status obs-status';
+    status.textContent = 'Проверяю…';
+    say(await api.invoke('obs:test'));
+  };
+
+  const cfg = () => ({ host: '127.0.0.1', port: 4455, launch: true, ...(getPath('settings.record.obs') || {}) });
+  const host = h('input', { class: 'field', type: 'text', value: cfg().host, spellcheck: false, style: { width: '130px' }, 'aria-label': 'Адрес OBS' });
+  const port = h('input', { class: 'field', type: 'number', min: 1, max: 65535, value: cfg().port, style: { width: '84px' }, 'aria-label': 'Порт OBS' });
+  const saveAddress = () => {
+    const p = Math.round(Number(port.value));
+    save('settings.record.obs', { ...cfg(), host: host.value.trim() || '127.0.0.1', port: p >= 1 && p <= 65535 ? p : 4455 });
+    setTimeout(check, 300);
+  };
+  host.addEventListener('change', saveAddress);
+  port.addEventListener('change', saveAddress);
+
+  const password = h('input', { class: 'field', type: 'password', autocomplete: 'off', placeholder: 'пароль не задан', style: { width: '190px' }, 'aria-label': 'Пароль сервера WebSocket' });
+  const savePassword = async () => {
+    status.className = 'status obs-status';
+    status.textContent = 'Проверяю…';
+    say(await api.invoke('obs:setPassword', password.value));
+    password.value = '';
+    password.placeholder = 'пароль сохранён';
+  };
+  password.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') savePassword();
+  });
+  api.invoke('obs:info').then((info) => {
+    if (info.hasPassword) password.placeholder = 'пароль сохранён';
+    if (info.connected) say({ ok: true, version: info.version });
+    else check();
+  });
+
+  return group(
+    row('Связь с OBS', null, status, h('button', { class: 'btn small', text: 'Проверить', data: { act: 'obs-test' }, onclick: check })),
+    row('Пароль сервера WebSocket', 'Хранится на этом компьютере в зашифрованном виде. Если в OBS проверка пароля выключена, оставьте пустым',
+      password, h('button', { class: 'btn small', text: 'Сохранить', data: { act: 'obs-password' }, onclick: savePassword })),
+    row('Адрес и порт', 'Если OBS на этом же компьютере, менять не нужно', host, port),
+    row('Запускать OBS, если она не открыта', 'OBS запустится свёрнутой в трей, запись начнётся, как только она ответит',
+      toggle(cfg().launch !== false, (v) => save('settings.record.obs', { ...cfg(), launch: v }), 'Запускать OBS')),
+    h('div', { class: 'row tall' }, h('div', { class: 'row-hint obs-help' },
+      h('b', { text: 'Как включить в OBS (один раз): ' }),
+      'меню «Сервис» (Tools) → «Настройки сервера WebSocket» (WebSocket Server Settings) → поставить галочку «Включить сервер WebSocket» → ',
+      '«Показать сведения о подключении» → скопировать пароль в поле выше. ',
+      'Что записывать, в каком качестве, с каким звуком и в какую папку, решает OBS: её сцены и её настройки вывода.')),
+  );
 }
 
 function homeSection() {
@@ -390,6 +465,12 @@ async function boot() {
     applyLook(data.settings, sys.dark);
     // a change made elsewhere (the tray menu, the island): show it
     if (!document.activeElement || document.activeElement === document.body) render();
+  });
+  api.on('obs:state', (s) => {
+    const el = document.querySelector('.obs-status');
+    if (!el || !s.connected) return;
+    el.className = 'status obs-status ok';
+    el.textContent = `OBS ${s.version || ''} отвечает`.replace('  ', ' ') + (s.recording ? ' · идёт запись' : '');
   });
   api.on('settings:section', (id) => {
     section = id;

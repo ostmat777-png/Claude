@@ -6,6 +6,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { spawn, execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const {
   app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, protocol, net,
@@ -20,6 +21,8 @@ const clipio = require('./clipio.js');
 const { NetApi } = require('./netapi.js');
 const { Wifi } = require('./wifi.js');
 const { Launcher } = require('./launcher.js');
+const { ObsClient, ObsControl } = require('./obs.js');
+const secret = require('./secret.js');
 
 const TEST = process.env.KAPLYA_TEST === '1';
 // Tests start from an empty profile every time; the first-start greeting would get
@@ -52,6 +55,7 @@ if (!TEST && !app.requestSingleInstanceLock()) {
 /** @type {NetApi} */ let netApi;
 /** @type {Wifi} */ let wifi;
 /** @type {Launcher} */ let launcher;
+/** @type {ObsControl} */ let obs;
 let shared = {};
 
 /** @type {BrowserWindow|null} */ let island = null;
@@ -528,6 +532,100 @@ function stopRecording() {
   if (rec) sendIsland('rec:stop');
 }
 
+function isRecording() {
+  return Boolean((rec && !rec.pending) || (obs && obs.state.recording));
+}
+
+// ------------------------------------------------------------------ recording through OBS Studio
+
+function recordEngine() {
+  return store.get('settings.record.engine') === 'obs' ? 'obs' : 'builtin';
+}
+
+function obsConfig() {
+  const c = store.get('settings.record.obs') || {};
+  return {
+    host: String(c.host || '127.0.0.1').trim() || '127.0.0.1',
+    port: clamp(Math.round(Number(c.port)) || 4455, 1, 65535),
+    launch: c.launch !== false,
+  };
+}
+
+const OBS_ERRORS = {
+  unreachable: ['OBS не отвечает', 'Запустите OBS Studio и включите в ней сервер WebSocket'],
+  'no-websocket': ['OBS открыта, но не отвечает', 'В OBS: Сервис → Настройки сервера WebSocket → включить сервер'],
+  auth: ['OBS: пароль не подошёл', 'Укажите пароль сервера WebSocket в настройках Капли'],
+  'auth-missing': ['OBS просит пароль', 'Укажите пароль сервера WebSocket в настройках Капли'],
+  'not-installed': ['OBS Studio не найдена', 'Установите OBS или выберите встроенную запись'],
+  timeout: ['OBS не ответила вовремя', 'Попробуйте ещё раз'],
+  closed: ['Связь с OBS оборвалась', 'Попробуйте ещё раз'],
+};
+
+function obsErrorToast(err) {
+  const code = err && err.code === 'auth' && !store.get('obsSecret') ? 'auth-missing' : err && err.code;
+  const known = OBS_ERRORS[code];
+  if (known) return { type: 'error', title: known[0], text: known[1], settings: 'capture', hold: 8000 };
+  return { type: 'error', title: 'OBS не смогла выполнить команду', text: String((err && err.message) || err).slice(0, 140), settings: 'capture', hold: 8000 };
+}
+
+async function obsToggle() {
+  sendIsland('island:collapse');
+  try {
+    await obs.toggle();
+  } catch (err) {
+    toast(obsErrorToast(err));
+  }
+}
+
+async function obsStop() {
+  try {
+    await obs.stop();
+  } catch (err) {
+    toast(obsErrorToast(err));
+  }
+}
+
+function findObsProgram() {
+  const dirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432].filter(Boolean);
+  for (const dir of dirs) {
+    const exe = path.join(dir, 'obs-studio', 'bin', '64bit', 'obs64.exe');
+    if (fs.existsSync(exe)) return { exe, cwd: path.dirname(exe) };
+  }
+  // Installed somewhere else (Steam, another disk): the Start menu shortcut knows where.
+  const entry = launcher.apps.find((a) => a.kind === 'file' && /^obs studio/i.test(a.name));
+  if (entry) {
+    try {
+      const link = shell.readShortcutLink(entry.target);
+      if (link && link.target && fs.existsSync(link.target)) return { exe: link.target, cwd: link.cwd || path.dirname(link.target) };
+    } catch {}
+  }
+  return null;
+}
+
+/** Starts OBS minimised to the tray. @returns {Promise<boolean>} false when OBS is not on this computer */
+async function launchObs() {
+  if (process.platform !== 'win32') return false;
+  await launcher.refresh().catch(() => {});
+  const found = findObsProgram();
+  if (!found) return false;
+  try {
+    // OBS must be started from its own folder, or it cannot find its files.
+    spawn(found.exe, ['--minimize-to-tray'], { cwd: found.cwd, detached: true, stdio: 'ignore', windowsHide: false }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function obsProgramRunning() {
+  if (process.platform !== 'win32') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    execFile('tasklist.exe', ['/FI', 'IMAGENAME eq obs64.exe', '/NH', '/FO', 'CSV'], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
+      resolve(!err && /obs64\.exe/i.test(String(stdout)));
+    });
+  });
+}
+
 function canExcludeFromCapture() {
   if (process.platform !== 'win32') return true;
   const build = Number(String(os.release()).split('.')[2]) || 0;
@@ -562,6 +660,8 @@ async function runAction(id) {
     case 'qr': return startCapture('qr');
     case 'color': return startCapture('color');
     case 'record':
+      // OBS records when it is chosen in the settings, or when it is recording right now.
+      if (!rec && (recordEngine() === 'obs' || obs.state.recording)) return obsToggle();
       // A recording that was asked for but never began (the page did not answer)
       // must not block the next attempt for ever.
       if (rec && rec.pending && Date.now() - rec.askedAt > 15000) rec = null;
@@ -641,7 +741,7 @@ function refreshTray() {
     { type: 'separator' },
     { label: 'Скриншот области', click: () => runAction('region') },
     { label: 'Текст с экрана', click: () => runAction('ocr') },
-    { label: rec ? 'Остановить запись' : 'Запись экрана', click: () => runAction('record') },
+    { label: isRecording() ? 'Остановить запись' : 'Запись экрана', click: () => runAction('record') },
     { type: 'separator' },
     { label: 'Запускать вместе с Windows', type: 'checkbox', checked: Boolean(store.get('settings.autostart')), click: (item) => store.set('settings.autostart', item.checked) },
     { label: 'Настройки…', click: () => openSettings() },
@@ -713,14 +813,15 @@ function registerIpc() {
     version: VERSION,
     platform: process.platform,
     test: TEST,
-    data: store.data,
+    data: { ...store.data, obsSecret: undefined }, // pages never see the stored password
     system: system.snapshot(),
     clips: clips.list(),
     hotkeys: hotkeyStatus,
-    recording: Boolean(rec && !rec.pending),
+    recording: isRecording(),
+    recordingSince: obs.state.recording ? obs.state.startedAt : rec && rec.startedAt ? rec.startedAt : 0,
   }));
 
-  handle('store:get', (key) => store.get(key));
+  handle('store:get', (key) => (String(key).startsWith('obsSecret') ? undefined : store.get(key)));
   handle('store:set', (key, value) => {
     if (!storeKeyAllowed(key)) throw new Error('bad key');
     store.set(key, value);
@@ -833,7 +934,23 @@ function registerIpc() {
     refreshTray();
     return true;
   });
-  handle('rec:stop', () => stopRecording());
+  handle('rec:stop', () => (obs.state.recording ? obsStop() : stopRecording()));
+
+  // --- recording through OBS Studio
+  handle('obs:info', () => ({
+    engine: recordEngine(),
+    hasPassword: Boolean(store.get('obsSecret')),
+    connected: obs.state.connected,
+    version: obs.state.version,
+    recording: obs.state.recording,
+  }));
+  // "auth" without a stored password means "OBS wants one"; with one, "it is wrong".
+  const obsTest = async () => ({ ...(await obs.test()), hasPassword: Boolean(store.get('obsSecret')) });
+  handle('obs:setPassword', async (password) => {
+    store.set('obsSecret', await secret.seal(String(password || '')));
+    return obsTest();
+  });
+  handle('obs:test', obsTest);
 
   // --- weather
   handle('weather:get', async (force) => {
@@ -1092,6 +1209,13 @@ async function main() {
   const fetchFn = TEST && process.env.KAPLYA_TEST_FETCH ? require(process.env.KAPLYA_TEST_FETCH) : (url, init) => net.fetch(url, init);
   netApi = new NetApi(fetchFn, shared);
   wifi = new Wifi(helper, shared);
+  obs = new ObsControl({
+    client: new ObsClient(),
+    getConfig: obsConfig,
+    getPassword: () => secret.open(store.get('obsSecret')),
+    isRunning: obsProgramRunning,
+    launch: launchObs,
+  });
   launcher = new Launcher({ helper, shared, getFileIcon: (f) => fileIcon(f) });
 
   registerProtocol();
@@ -1108,6 +1232,19 @@ async function main() {
   system.on('volume', (v) => broadcast('sys:volume', v));
   system.on('theme', (dark) => broadcast('sys:theme', dark));
   system.on('fullscreen', (full) => sendIsland('island:fullscreen', full && store.get('settings.hideOnFullscreen') !== false));
+  obs.on('state', (s) => {
+    broadcast('rec:state', { recording: s.recording, startedAt: s.startedAt, engine: 'obs' });
+    broadcast('obs:state', { connected: s.connected, version: s.version, recording: s.recording });
+    // Keep the island itself out of what OBS records, where Windows can do that.
+    if (island && !island.isDestroyed() && canExcludeFromCapture()) island.setContentProtection(s.recording);
+    refreshTray();
+  });
+  obs.on('saved', (file) => {
+    toast({ type: 'record', title: 'Запись сохранена', text: file ? 'OBS · ' + String(file).split(/[\\/]/).pop() : 'OBS сохранила запись в свою папку', file: file || null });
+  });
+  obs.on('launching', () => {
+    toast({ type: 'info', icon: 'video', title: 'Запускаю OBS…', text: 'Запись начнётся, как только OBS ответит', hold: 7000 });
+  });
   clips.on('change', (list) => sendIsland('clip:changed', list));
   clips.on('copied', (item) => {
     if (store.get('settings.copyToast') === false) return;
@@ -1122,7 +1259,7 @@ async function main() {
   });
 
   store.on('change', (key, value) => {
-    broadcast('store:changed', key, value);
+    if (key !== 'obsSecret') broadcast('store:changed', key, value); // the stored password stays here
     if (key === 'settings.scale') placeIsland();
     if (key === 'settings.autostart') {
       applyAutostart();
@@ -1132,6 +1269,8 @@ async function main() {
     if (key === 'settings.clipboard.limit') clips.limit = clamp(Number(value) || 60, 10, 300);
     if (key === 'settings.clipboard.images') clips.keepImages = value !== false;
     if (key === 'settings.hideOnFullscreen') sendIsland('island:fullscreen', system.fullscreen && value !== false);
+    if (key === 'settings.record.engine' || key === 'settings.record') obs.setEnabled(recordEngine() === 'obs');
+    if (key.startsWith('settings.record.obs') || key === 'obsSecret') obs.reconnect();
   });
 
   createIsland();
@@ -1141,6 +1280,7 @@ async function main() {
   system.start();
   clips.start();
   launcher.refresh().catch(() => {});
+  obs.setEnabled(recordEngine() === 'obs');
   setInterval(checkReminders, 5000);
 
   screen.on('display-metrics-changed', placeIsland);
@@ -1162,6 +1302,7 @@ async function main() {
     system.stop();
     clips.stop();
     helper.stop();
+    obs.setEnabled(false);
   });
 
   if (TEST) {
@@ -1180,6 +1321,7 @@ async function main() {
       store,
       clips,
       clipio,
+      obs,
       system,
       checkReminders,
     };
