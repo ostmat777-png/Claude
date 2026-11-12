@@ -167,7 +167,10 @@ const CSP = [
 function registerProtocol() {
   protocol.handle('kaplya', async (request) => {
     const url = new URL(request.url);
-    if (url.host !== 'app') return new Response('not found', { status: 404 });
+    // Two names for the same files. The island lives under its own name because the
+    // browser engine keeps one zoom level per site name: the island's size must not
+    // leak into the settings window or the capture overlay.
+    if (url.host !== 'app' && url.host !== 'island') return new Response('not found', { status: 404 });
     let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
     // The frozen screen for the capture overlay. Same origin as the page, so the
     // page may read its pixels.
@@ -275,7 +278,7 @@ function createIsland() {
     openExternal(url);
     return { action: 'deny' };
   });
-  island.loadURL('kaplya://app/island.html');
+  island.loadURL('kaplya://island/island.html');
 }
 
 function placeIsland() {

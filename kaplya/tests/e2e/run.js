@@ -740,7 +740,10 @@ async function main() {
 
   // Most laptops run Windows at 125-150% scaling: the picture has more pixels than
   // the screen has "points". Selections, drawings and videos must come out in real pixels.
-  await scenario('capture: at 150% display scaling', () => {
+  // The scaling is emulated with a command-line switch. On Windows that switch is
+  // not a faithful emulation (window sizes and screen sizes stop agreeing), so these
+  // two scenarios run only where it is.
+  if (!isWin) await scenario('capture: at 150% display scaling', () => {
     const dir = tmpDir('scaled');
     return {
       args: ['--force-device-scale-factor=1.5'],
@@ -822,7 +825,7 @@ async function main() {
 
   // A small screen (an old laptop, or a big one at 200% scaling): the island makes
   // itself smaller, so that every tab is still whole.
-  await scenario('small screen: the island shrinks to fit', { args: ['--force-device-scale-factor=2.5'], data: withWeather.data }, async (k) => {
+  if (!isWin) await scenario('small screen: the island shrinks to fit', { args: ['--force-device-scale-factor=2.5'], data: withWeather.data }, async (k) => {
     const d = await k.main(({ screen }) => screen.getPrimaryDisplay().bounds);
     const zoom = await k.main(() => globalThis.__kaplyaTest.zoom());
     assert.ok(d.width < 800, 'the test screen is small: ' + JSON.stringify(d));
@@ -904,6 +907,10 @@ async function main() {
     const wantZoom = 1.2 * Math.min(1, disp.width / (760 * 1.2), disp.height / (660 * 1.2));
     await k.main(() => globalThis.__kaplyaTest.store.set('settings.scale', 1.2));
     await until(async () => Math.abs((await k.main(() => globalThis.__kaplyaTest.zoom())) - wantZoom) < 0.001, 'zoom');
+    await until(async () => Math.abs((await k.main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('island.html')).webContents.getZoomFactor())) - wantZoom) < 0.01, 'the island page to be resized');
+    // ...and only the island: the settings window keeps its own size
+    const settingsZoom = await k.main(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('settings.html')).webContents.getZoomFactor());
+    assert.ok(Math.abs(settingsZoom - 1) < 0.001, 'the settings window is not resized with the island: ' + settingsZoom);
     await k.hover();
     await k.page.waitForSelector('#island[data-mode="open"]', { timeout: 4000 });
     assert.deepEqual(errors, [], 'errors in the settings page');
