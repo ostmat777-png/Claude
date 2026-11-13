@@ -3,6 +3,7 @@
 
 import { h, clear, icon } from '../ui.js';
 import { TOOLS, stats } from '../../shared/texttools.mjs';
+import { LANGUAGES, languageName, guessLanguage } from '../../shared/languages.mjs';
 
 export default {
   id: 'text',
@@ -105,17 +106,132 @@ export default {
       h('button', {
         class: 'btn small',
         title: 'Открыть перевод в браузере',
-        onclick: () => area.value.trim() && app.translate(area.value),
+        data: { act: 'translate' },
+        onclick: () => openTranslate(),
       }, icon('languages', 13), 'Перевести'),
       undoBtn,
       status,
       h('span', { class: 'grow' }),
       counter);
 
-    root.append(h('div', { class: 'text-top' }, area, tools), bar);
+    // ---------------------------------------------------------------- translation, right here
+    const tr = { from: 'auto', to: '', busy: false, seq: 0 };
+    const fromSel = h('select', { class: 'field tr-lang', 'aria-label': 'С какого языка' },
+      h('option', { value: 'auto', text: 'Определить язык' }), LANGUAGES.map(([c, n]) => h('option', { value: c, text: n })));
+    const toSel = h('select', { class: 'field tr-lang', 'aria-label': 'На какой язык' }, LANGUAGES.map(([c, n]) => h('option', { value: c, text: n })));
+    const swap = h('button', { class: 'ghost', title: 'Поменять языки местами', onclick: () => swapLangs() }, icon('arrow-left-right', 15));
+    const result = h('textarea', { class: 'text-area tr-result', readOnly: true, placeholder: 'Здесь появится перевод', spellcheck: false });
+    const trNote = h('span', { class: 'faint tr-note' });
+    const panel = h('div', { class: 'tr-panel', hidden: true },
+      h('div', { class: 'tr-bar' },
+        icon('languages', 15), fromSel, swap, toSel,
+        h('span', { class: 'grow' }),
+        h('button', { class: 'ghost', title: 'Закрыть перевод', onclick: () => closeTranslate() }, icon('x', 15))),
+      result,
+      h('div', { class: 'tr-actions' },
+        h('button', {
+          class: 'btn small',
+          data: { act: 'tr-copy' },
+          onclick: async () => {
+            if (!result.value) return;
+            await api.invoke('clip:write', result.value);
+            say('Перевод скопирован');
+          },
+        }, icon('copy', 13), 'Копировать'),
+        h('button', {
+          class: 'btn small',
+          title: 'Поставить перевод на место исходного текста',
+          data: { act: 'tr-replace' },
+          onclick: () => {
+            if (!result.value) return;
+            setText(result.value);
+            const was = fromSel.value === 'auto' ? guessLanguage(area.value) : fromSel.value;
+            toSel.value = was && was !== toSel.value ? was : toSel.value;
+            result.value = '';
+            trNote.textContent = '';
+          },
+        }, icon('corner-down-left', 13), 'Заменить текст'),
+        trNote));
+
+    function defaultTarget(text) {
+      const lang = guessLanguage(text);
+      return lang === 'ru' ? 'en' : 'ru';
+    }
+
+    function openTranslate() {
+      if (!area.value.trim()) return say('Сначала вставьте текст', 'error');
+      if (panel.hidden) {
+        const saved = app.settings.translate || {};
+        fromSel.value = 'auto';
+        // the last language chosen, unless the text is already in it
+        const guess = guessLanguage(area.value);
+        toSel.value = saved.to && saved.to !== guess ? saved.to : defaultTarget(area.value);
+        panel.hidden = false;
+        root.classList.add('translating');
+      }
+      runTranslate();
+      app.relayout();
+      return undefined;
+    }
+
+    function closeTranslate() {
+      panel.hidden = true;
+      root.classList.remove('translating');
+      app.relayout();
+    }
+
+    function swapLangs() {
+      const from = fromSel.value === 'auto' ? guessLanguage(area.value) || 'en' : fromSel.value;
+      fromSel.value = toSel.value;
+      toSel.value = from;
+      if (result.value) {
+        setText(result.value);
+        result.value = '';
+      }
+      runTranslate();
+    }
+
+    async function runTranslate() {
+      const text = area.value;
+      if (!text.trim() || panel.hidden) return;
+      const mine = ++tr.seq;
+      trNote.textContent = 'Перевожу…';
+      result.classList.add('busy');
+      const res = await api.invoke('translate', text, fromSel.value, toSel.value);
+      if (mine !== tr.seq) return; // a newer request is on its way
+      result.classList.remove('busy');
+      if (!res || !res.ok) {
+        trNote.textContent = 'Не получилось перевести: нет связи с сервисом перевода';
+        trNote.classList.add('bad');
+        return;
+      }
+      trNote.classList.remove('bad');
+      result.value = res.text;
+      const from = fromSel.value === 'auto' && res.from && res.from !== 'auto' ? `${languageName(res.from)} (определён)` : languageName(res.from);
+      trNote.textContent = `${from} → ${languageName(res.to)} · ${res.service}`;
+      app.set('settings.translate', { to: toSel.value });
+    }
+
+    fromSel.addEventListener('change', runTranslate);
+    toSel.addEventListener('change', runTranslate);
+    // retranslate a moment after typing stops
+    let typingTimer = 0;
+    area.addEventListener('input', () => {
+      if (panel.hidden) return;
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(runTranslate, 700);
+    });
+
+    root.append(h('div', { class: 'text-top' }, h('div', { class: 'text-left' }, area, panel), tools), bar);
 
     return {
       show(arg) {
+        if (arg && arg.translate && typeof arg.text === 'string') {
+          setText(arg.text);
+          openTranslate();
+          paintCounter();
+          return;
+        }
         if (arg && typeof arg.text === 'string') {
           setText(arg.text);
           say('Текст с экрана');

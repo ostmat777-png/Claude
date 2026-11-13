@@ -374,6 +374,33 @@ async function main() {
     assert.equal(await k.page.inputValue('.text-area'), '{\n  "a": 1\n}');
     await k.shot('text');
 
+    // translation, right in the island: the language is guessed, the target chosen
+    await k.page.fill('.text-area', 'Встречу перенесли на пятницу');
+    await k.page.click('.text-bar button[data-act="translate"]');
+    await k.page.waitForSelector('.tr-panel:not([hidden])');
+    await until(async () => (await k.page.inputValue('.tr-result')) === 'The meeting was moved to Friday', 'translated into English');
+    assert.equal(await k.page.inputValue('select[aria-label="На какой язык"]'), 'en');
+    assert.match(await text(k, '.tr-note'), /Русский \(определён\) → Английский · Google/);
+    await k.settle(300);
+    await k.shot('text-translate');
+    // another language: translated again at once
+    await k.page.selectOption('select[aria-label="На какой язык"]', 'de');
+    await until(async () => (await k.page.inputValue('.tr-result')) === '[de] Встречу перенесли на пятницу', 'translated into German');
+    // swap: the translation becomes the text, the languages change places
+    await k.page.selectOption('select[aria-label="На какой язык"]', 'en');
+    await until(async () => (await k.page.inputValue('.tr-result')) === 'The meeting was moved to Friday', 'back to English');
+    await k.page.click('.tr-bar button[title="Поменять языки местами"]');
+    await until(async () => (await k.page.inputValue('.text-area:not(.tr-result)')) === 'The meeting was moved to Friday', 'the text swapped');
+    await until(async () => (await k.page.inputValue('.tr-result')) === 'Встречу перенесли на пятницу', 'translated back');
+    assert.equal(await k.page.inputValue('select[aria-label="С какого языка"]'), 'en');
+    assert.equal(await k.page.inputValue('select[aria-label="На какой язык"]'), 'ru');
+    // copy the translation
+    await k.page.click('.tr-actions button[data-act="tr-copy"]');
+    await until(async () => (await clipText(k)) === 'Встречу перенесли на пятницу', 'translation on the clipboard');
+    // no browser was opened for any of it
+    await k.page.click('.tr-bar button[title="Закрыть перевод"]');
+    await k.page.waitForSelector('.tr-panel[hidden]', { state: 'attached' });
+
     // typing keeps the island open even when the mouse leaves; losing focus closes it
     await k.page.click('.text-area');
     await k.leave();

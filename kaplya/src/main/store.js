@@ -47,6 +47,7 @@ const DEFAULTS = {
     },
     clipboard: { limit: 60, images: true },
     search: 'google', // google | yandex | duckduckgo
+    translate: { to: '' }, // the last language translated into
     musicSearch: 'yandex', // where "find this track" opens: yandex | vk | youtube | ytmusic | spotify
     chat: { service: 'deepseek', custom: '' },
     ocrLang: '',

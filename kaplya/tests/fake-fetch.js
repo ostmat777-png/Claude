@@ -51,9 +51,23 @@ const LRC = `[00:05.00]Над тихой водой поднимается св�
 
 const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
-module.exports = async function fakeFetch(url) {
+// A pretend translator: a few known phrases, everything else marked with the language.
+const PHRASES = {
+  'ru>en': { 'Встречу перенесли на пятницу': 'The meeting was moved to Friday', 'Привет': 'Hello' },
+  'en>ru': { 'The meeting was moved to Friday': 'Встречу перенесли на пятницу', 'Hello': 'Привет' },
+};
+
+module.exports = async function fakeFetch(url, init = {}) {
   const u = new URL(String(url));
   if (process.env.KAPLYA_TEST_OFFLINE === '1') throw new Error('offline');
+  if (u.hostname === 'translate.googleapis.com') {
+    const q = new URLSearchParams(String(init.body || '')).get('q') || '';
+    const tl = u.searchParams.get('tl');
+    let sl = u.searchParams.get('sl');
+    if (sl === 'auto') sl = /[а-яё]/i.test(q) ? 'ru' : 'en';
+    const known = (PHRASES[`${sl}>${tl}`] || {})[q.trim()];
+    return json({ src: sl, sentences: [{ trans: known || `[${tl}] ${q}`, orig: q }] });
+  }
   if (u.hostname === 'api.open-meteo.com') return json(forecast());
   if (u.hostname === 'geocoding-api.open-meteo.com') {
     const name = u.searchParams.get('name') || '';

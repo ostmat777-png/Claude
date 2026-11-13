@@ -454,10 +454,7 @@ function paintToast(t) {
     if (t.file) actions.push(round('folder-open', 'Показать в папке', () => api.invoke('open:reveal', t.file)));
   }
   if (t.type === 'text') {
-    actions.push(round('languages', 'Перевести', () => {
-      translate(t.payload);
-      endToast();
-    }));
+    actions.push(round('languages', 'Перевести', () => openTab('text', { text: t.payload, translate: true })));
     actions.push(round('type', 'Открыть во вкладке «Текст»', () => openTab('text', { text: t.payload }), true));
   }
   if (t.type === 'qr' && /^https?:\/\//i.test(t.payload || '')) {

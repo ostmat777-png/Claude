@@ -990,6 +990,13 @@ function registerIpc() {
     }
   });
   handle('weather:search', (q) => netApi.searchPlaces(q).catch(() => []));
+  handle('translate', async (text, from, to) => {
+    try {
+      return { ok: true, ...(await netApi.translate(String(text || '').slice(0, 30000), String(from || 'auto'), String(to || 'ru'))) };
+    } catch {
+      return { ok: false };
+    }
+  });
   handle('weather:locate', () => netApi.locate().catch(() => null));
 
   // --- control centre
@@ -1295,10 +1302,10 @@ function setupSessions() {
 
 async function loadShared() {
   const load = (name) => import(pathToFileURL(path.join(SHARED_DIR, name)).href);
-  const [weather, lrc, netsh, fuzzy, calc, remind] = await Promise.all(
-    ['weather.mjs', 'lrc.mjs', 'netsh.mjs', 'fuzzy.mjs', 'calc.mjs', 'remind.mjs'].map(load),
+  const [weather, lrc, netsh, fuzzy, calc, remind, languages] = await Promise.all(
+    ['weather.mjs', 'lrc.mjs', 'netsh.mjs', 'fuzzy.mjs', 'calc.mjs', 'remind.mjs', 'languages.mjs'].map(load),
   );
-  shared = { weather, lrc, netsh, fuzzy, calc, remind };
+  shared = { weather, lrc, netsh, fuzzy, calc, remind, languages };
 }
 
 async function main() {
