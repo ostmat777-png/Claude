@@ -1,0 +1,272 @@
+# Строки интерфейса, меню и прочие тексты вне диалогов.
+# Формат: строка "old: ..." и следующая за ней "new: ...". \n — перенос строки.
+
+## Быстрое меню и навигация
+old: History
+new: История
+old: Skip
+new: Пропуск
+old: Auto
+new: Авто
+old: Save
+new: Сохранить
+old: Load
+new: Загрузить
+old: Settings
+new: Настройки
+old: Please enter your name
+new: Пожалуйста, введите своё имя
+old: New Game
+new: Новая игра
+old: Save Game
+new: Сохранить
+old: Load Game
+new: Загрузить
+old: End Replay
+new: Завершить повтор
+old: Main Menu
+new: Главное меню
+old: Help
+new: Помощь
+old: The help file has been opened in your browser.
+new: Файл справки открыт в вашем браузере.
+old: Quit
+new: Выход
+old: Return
+new: Назад
+old: About
+new: Об игре
+old: Version [config.version!t]\n
+new: Версия [config.version!t]\n
+old: Made with {a=https://www.renpy.org/}Ren'Py{/a} [renpy.version_only].\n\n[renpy.license!t]
+new: Сделано на {a=https://www.renpy.org/}Ren'Py{/a} [renpy.version_only].\n\n[renpy.license!t]
+
+## Сохранения
+old: File error: "characters/sayori.chr"\n\nThe file is missing or corrupt.
+new: Ошибка файла: "characters/sayori.chr"\n\nФайл отсутствует или повреждён.
+old: The save file is corrupt. Starting a new game.
+new: Файл сохранения повреждён. Начинается новая игра.
+old: There's no point in saving anymore.\nDon't worry, I'm not going anywhere.
+new: Больше нет смысла сохраняться.\nНе волнуйся, я никуда не денусь.
+old: {#file_time}%A, %B %d %Y, %H:%M
+new: {#file_time}%A, %d %B %Y, %H:%M
+old: empty slot
+new: пустой слот
+
+## Настройки
+old: Display
+new: Экран
+old: Window
+new: Оконный
+old: Fullscreen
+new: Полный экран
+old: Rollback Side
+new: Сторона отката
+old: Disable
+new: Отключить
+old: Left
+new: Слева
+old: Right
+new: Справа
+old: Unseen Text
+new: Непрочитанное
+old: After Choices
+new: После выборов
+old: Text Speed
+new: Скорость текста
+old: Auto-Forward Time
+new: Автопрокрутка
+old: Music Volume
+new: Громкость музыки
+old: Sound Volume
+new: Громкость звуков
+old: Voice Volume
+new: Громкость голоса
+old: Test
+new: Тест
+old: Mute All
+new: Без звука
+old: The dialogue history is empty.
+new: История диалогов пуста.
+old: OK
+new: ОК
+old: Yes
+new: Да
+old: No
+new: Нет
+old: Skipping
+new: Пропуск
+
+## Имена персонажей
+old: Sayori
+new: Сайори
+old: Natsuki
+new: Нацуки
+old: Yuri
+new: Юри
+old: Monika
+new: Моника
+old: Nat & Yuri
+new: Нацуки и Юри
+old: Girl 1
+new: Девушка 1
+old: Girl 2
+new: Девушка 2
+old: Girl 3
+new: Девушка 3
+
+## Выборы в меню
+old: So, of course that's going to be...!
+new: Так что, разумеется, это будет...!
+old: Natsuki.
+new: Нацуки.
+old: Yuri.
+new: Юри.
+old: Monika.
+new: Моника.
+old: Help me, Sayori!!
+new: Помоги, Сайори!!
+old: Well...
+new: Ну...
+old: I would walk home with [ch2_winner].
+new: Я бы пошёл домой с [ch2_winner!t].
+old: I would still walk home with Sayori.
+new: Я бы всё равно пошёл домой с Сайори.
+old: Yes.
+new: Да.
+old: No.
+new: Нет.
+old: But of course, I'm going to go with--
+new: Но, конечно же, я выберу—
+old: Sayori...
+new: Сайори...
+old: I love you.
+new: Я люблю тебя.
+old: You'll always be my dearest friend.
+new: Ты всегда будешь моим самым дорогим другом.
+old: [menutext]
+new: [menutext!t]
+old: Who should I show my poem to first?
+new: Кому показать стихотворение первой?
+old: Who should I show my poem to next?
+new: Кому показать стихотворение следующей?
+old: Just Monika.
+new: Только Моника.
+old: A previous save file has been found. Would you like to delete your save data and start over?
+new: Найдено предыдущее сохранение. Хотите удалить сохранённые данные и начать заново?
+old: Yes, delete my existing data.
+new: Да, удалить мои данные.
+old: No, continue where I left off.
+new: Нет, продолжить с того же места.
+old: By playing Doki Doki Literature Club, you agree that you are at least 13 years of age, and you consent to your exposure of highly disturbing content.
+new: Играя в Doki Doki Literature Club, вы подтверждаете, что вам уже исполнилось 13 лет, и соглашаетесь на просмотр крайне тревожного содержания.
+old: I agree.
+new: Принимаю.
+
+## Заставка
+old: [splash_message]
+new: [splash_message!t]
+old: This game is not suitable for children\nor those who are easily disturbed.
+new: Эта игра не предназначена для детей\nи впечатлительных людей.
+old: You are my sunshine,\nMy only sunshine
+new: Ты моё солнышко,\nМоё единственное солнышко
+old: I missed you.
+new: Я скучала по тебе.
+old: Play with me
+new: Поиграй со мной
+old: It's just a game, mostly.
+new: Это просто игра. В основном.
+old: This game is not suitable for children\nor those who are easily disturbed?
+new: Эта игра не предназначена для детей\nи впечатлительных людей?
+old: I have granted kids to hell
+new: Я отдала детей в ад
+old: PM died for this.
+new: PM погиб ради этого.
+old: It was only partially your fault.
+new: Ты виноват лишь отчасти.
+old: This game is not suitable for children\nor those who are easily dismembered.
+new: Эта игра не предназначена для детей\nи тех, кого легко расчленить.
+old: Don't forget to backup Monika's character file.
+new: Не забудь сделать резервную копию файла Моники.
+old: Hint: You can use the "Skip" button to\nfast-forward through text you've already read.
+new: Подсказка: кнопкой «Пропуск» можно\nпроматывать уже прочитанный текст.
+old: Now everyone can be happy.
+new: Теперь все могут быть счастливы.
+
+## Мини-игра со стихами
+old: It's time to write a poem!\n\nPick words you think your favorite club member\nwill like. Something good might happen with\nwhoever likes your poem the most!
+new: Пора написать стихотворение!\n\nВыбирайте слова, которые, по-вашему, понравятся\nвашей любимой участнице клуба. С той, кому\nстихотворение понравится больше всех,\nможет случиться что-то хорошее!
+old: You have unlocked a special poem.\nWould you like to read it?
+new: Вы открыли особое стихотворение.\nХотите его прочитать?
+
+## Сообщения в окнах
+old: Please stop playing with my heart.\nI don't want to come back.
+new: Пожалуйста, перестань играть с моим сердцем.\nЯ не хочу возвращаться.
+old: No...
+new: Нет...
+old: I won't let you hurt him.
+new: Я не позволю тебе причинить ему боль.
+old: I'm sorry... I was wrong.
+new: Прости... Я была неправа.
+old: There's no happiness here after all...
+new: Здесь всё-таки нет счастья...
+old: Goodbye, Sayori.
+new: Прощай, Сайори.
+old: Goodbye, [player].
+new: Прощай, [player].
+old: Goodbye, Literature Club.
+new: Прощай, Литературный клуб.
+old: Please help me.
+new: Пожалуйста, помоги мне.
+old: Error: Script file is missing or corrupt.\nPlease reinstall the game.
+new: Ошибка: файл сценария отсутствует или повреждён.\nПожалуйста, переустановите игру.
+old: An exception has occurred.
+new: Произошло исключение.
+old: File "game/script-ch5.rpy", line 307\nSee traceback.txt for details.
+new: Файл "game/script-ch5.rpy", строка 307\nПодробности смотрите в traceback.txt.
+
+## Титры
+old: Concept & Game Design
+new: Концепция и геймдизайн
+old: Character Art
+new: Рисунок персонажей
+old: Background Art
+new: Фоны
+old: Writing
+new: Сценарий
+old: Music
+new: Музыка
+old: Vocals
+new: Вокал
+old: Special Thanks
+new: Особая благодарность
+old: Monika\n[player]
+new: Моника\n[player]
+old: made with love by
+new: сделано с любовью
+
+## Месяцы в дате сохранения (родительный падеж, строчные)
+old: {#month}January
+new: {#month}января
+old: {#month}February
+new: {#month}февраля
+old: {#month}March
+new: {#month}марта
+old: {#month}April
+new: {#month}апреля
+old: {#month}May
+new: {#month}мая
+old: {#month}June
+new: {#month}июня
+old: {#month}July
+new: {#month}июля
+old: {#month}August
+new: {#month}августа
+old: {#month}September
+new: {#month}сентября
+old: {#month}October
+new: {#month}октября
+old: {#month}November
+new: {#month}ноября
+old: {#month}December
+new: {#month}декабря
