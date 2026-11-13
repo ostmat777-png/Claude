@@ -528,29 +528,70 @@ async function main() {
   });
 
   // ------------------------------------------------------------------ shelf
-  await scenario('shelf: files come in, are listed, leave', {}, async (k) => {
+  await scenario('shelf: pictures show themselves, several files are chosen and taken out together', {}, async (k) => {
     const dir = tmpDir('shelf');
     const a = path.join(dir, 'Отчёт Q3.pdf');
-    const b = path.join(dir, 'logo-final.png');
+    const b = path.join(dir, 'Снимок экрана 2026-11-12.png');
+    const c = path.join(dir, 'заметки.txt');
+    const d = path.join(dir, 'logo-final.png');
     fs.writeFileSync(a, Buffer.alloc(1800000));
-    fs.writeFileSync(b, Buffer.alloc(402000));
+    fs.copyFileSync(path.join(__dirname, '..', 'fixtures', 'qr.png'), b);
+    fs.writeFileSync(c, 'привет');
+    fs.copyFileSync(path.join(__dirname, '..', '..', 'assets', 'icon.png'), d);
     await k.open('shelf');
     assert.match(await text(k, '.shelf-empty'), /Перетащите сюда файлы/);
-    await k.page.evaluate((paths) => window.kaplya.invoke('shelf:add', paths), [a, b, path.join(dir, 'нет такого.txt')]);
-    await until(async () => (await k.page.locator('.file').count()) === 2, 'files on the shelf');
+    await k.page.evaluate((paths) => window.kaplya.invoke('shelf:add', paths), [a, b, c, d, path.join(dir, 'нет такого.txt')]);
+    await until(async () => (await k.page.locator('.file').count()) === 4, 'files on the shelf');
     assert.match(await text(k, '.file >> nth=0'), /Отчёт Q3\.pdf.*1,7 МБ/s);
-    assert.equal(await text(k, '#rail button[data-tab="shelf"] .badge'), '2');
-    await k.settle();
-    await k.shot('shelf');
+    assert.equal(await text(k, '#rail button[data-tab="shelf"] .badge'), '4');
+    // the screenshot shows what is in it, not a generic picture icon
+    await until(async () => (await k.page.locator('.file-art.preview img.file-preview').count()) === 2, 'two picture previews');
     // the same file twice is one entry
     await k.page.evaluate((paths) => window.kaplya.invoke('shelf:add', paths), [a]);
     await sleep(300);
-    assert.equal(await k.page.locator('.file').count(), 2);
-    await k.page.locator('.file >> nth=0').hover();
-    await k.page.locator('.file >> nth=0').locator('button[title="Убрать с полки"]').click();
-    await until(async () => (await k.page.locator('.file').count()) === 1, 'file to leave');
+    assert.equal(await k.page.locator('.file').count(), 4);
+
+    // choose: a click, Ctrl+click, Shift+click
+    const tile = (n) => k.page.locator('.file').nth(n);
+    await tile(0).click();
+    assert.equal(await k.page.locator('.file.selected').count(), 1);
+    await tile(2).click({ modifiers: ['Shift'] });
+    assert.equal(await k.page.locator('.file.selected').count(), 3, 'Shift takes the range, as in Explorer');
+    await tile(3).click({ modifiers: ['Control'] });
+    await tile(1).click({ modifiers: ['Control'] });
+    assert.equal(await k.page.locator('.file.selected').count(), 3, 'Ctrl adds and takes away one file');
+    assert.match(await text(k, '#head-actions .btn'), /Перетащить 3/);
+    await k.settle(300);
+    await k.shot('shelf');
+    // what a drag would take: the selected ones
+    await k.page.evaluate(() => document.querySelectorAll('.file')[2].dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true })));
+    await until(async () => await k.main(() => globalThis.__kaplyaTest.lastDrag()), 'the drag to reach the app');
+    const dragged = await k.main(() => globalThis.__kaplyaTest.lastDrag());
+    assert.deepEqual(dragged.map((p) => path.basename(p)), ['Отчёт Q3.pdf', 'заметки.txt', 'logo-final.png']);
+    // Escape lets go, Ctrl+A takes all
+    await k.page.focus('.shelf-grid');
+    await k.page.keyboard.press('Escape');
+    assert.equal(await k.page.locator('.file.selected').count(), 0);
+    assert.equal(await k.mode(), 'open', 'Escape with a selection does not close the island');
+    await k.page.keyboard.press('Control+a');
+    assert.equal(await k.page.locator('.file.selected').count(), 4);
+    // a frame drawn from the empty space
+    await k.page.keyboard.press('Escape');
+    const g = await k.page.locator('.shelf-grid').boundingBox();
+    const t1 = await tile(1).boundingBox();
+    await k.page.mouse.move(g.x + g.width - 6, g.y + g.height - 6);
+    await k.page.mouse.down();
+    await k.page.mouse.move(t1.x + 10, t1.y + 10, { steps: 6 });
+    await k.page.mouse.up();
+    assert.ok((await k.page.locator('.file.selected').count()) >= 3, 'the frame chose the tiles it touched');
+    // Delete removes the chosen ones
+    await k.page.keyboard.press('Escape');
+    await tile(0).click();
+    await tile(1).click({ modifiers: ['Control'] });
+    await k.page.keyboard.press('Delete');
+    await until(async () => (await k.page.locator('.file').count()) === 2, 'two files removed together');
     // it survives a restart of the app
-    assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('shelf'))).length, 1);
+    assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('shelf'))).length, 2);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

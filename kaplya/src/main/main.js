@@ -73,6 +73,7 @@ let cursorTimer = null;
 let testCursor = null;
 let hotkeyStatus = {};
 let quitting = false;
+let lastDrag = null; // tests only: the files of the last drag out of the island
 
 const captures = new Map(); // id -> PNG buffer shown by the overlay
 let captureSeq = 1;
@@ -1145,6 +1146,11 @@ function registerIpc() {
     const files = (Array.isArray(paths) ? paths : []).map(String)
       .filter((f) => (known.has(f) || dirs.some((d) => f.startsWith(d + path.sep))) && fs.existsSync(f));
     if (!files.length) return;
+    if (TEST) {
+      // A virtual test screen has no drag and drop; say what would have been dragged.
+      lastDrag = files;
+      return;
+    }
     let icon = await fileIcon(files[0]);
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromPath(path.join(ASSETS_DIR, 'tray.png'));
     try {
@@ -1442,6 +1448,7 @@ async function main() {
       openPalette,
       openSettings,
       state: () => ({ hover, hitRects, rec: Boolean(rec), overlay: Boolean(overlay), hotkeys: hotkeyStatus }),
+      lastDrag: () => lastDrag,
       store,
       clips,
       clipio,
