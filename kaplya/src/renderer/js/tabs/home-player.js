@@ -8,6 +8,59 @@ import { formatTime, lineAt } from '../../shared/lrc.mjs';
 const likeKey = (m) => `${m.artist || ''}|${m.title || ''}`.toLowerCase();
 
 /**
+ * The colour of a cover: the average of its lively pixels (grey, black and white
+ * count for little), made dark enough for white text on top of it.
+ * @returns {Promise<[number, number, number] | null>}
+ */
+export async function coverColor(url) {
+  const img = new Image();
+  img.src = url;
+  try {
+    await img.decode();
+  } catch {
+    return null;
+  }
+  const n = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = n;
+  canvas.height = n;
+  const g = canvas.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, n, n);
+  let data;
+  try {
+    data = g.getImageData(0, 0, n, n).data;
+  } catch {
+    return null;
+  }
+  let r = 0;
+  let gr = 0;
+  let b = 0;
+  let total = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const R = data[i];
+    const G = data[i + 1];
+    const B = data[i + 2];
+    const max = Math.max(R, G, B);
+    const min = Math.min(R, G, B);
+    const sat = max ? (max - min) / max : 0;
+    const light = (max + min) / 510;
+    // colourful, not too dark, not blown out
+    const w = 0.04 + sat * sat * (light > 0.08 && light < 0.95 ? 1 : 0.2);
+    r += R * w;
+    gr += G * w;
+    b += B * w;
+    total += w;
+  }
+  if (!total) return null;
+  let c = [r / total, gr / total, b / total];
+  // keep the hue, cap the brightness so the card stays dark and readable
+  const lum = (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255;
+  const k = lum > 0.42 ? 0.42 / lum : 1;
+  c = c.map((v) => Math.round(Math.min(255, v * k)));
+  return c;
+}
+
+/**
  * @param {object} app      the island's shared state
  * @param {object} hooks
  * @param {() => void} hooks.resized   the player changed height
@@ -49,6 +102,21 @@ export function createPlayer(app, hooks) {
 
   // ---------------------------------------------------------------- the part that opens: all the words, or the liked list
   const stageEl = h('div', { class: 'player-stage', hidden: true });
+
+  let tintFor = '';
+  async function paintTint(url) {
+    if (url === tintFor) return;
+    tintFor = url || '';
+    const c = url ? await coverColor(url) : null;
+    if (tintFor !== (url || '')) return; // another cover came meanwhile
+    if (c) {
+      el.style.setProperty('--tint', `rgb(${c[0]}, ${c[1]}, ${c[2]})`);
+      el.classList.add('tinted');
+    } else {
+      el.style.removeProperty('--tint');
+      el.classList.remove('tinted');
+    }
+  }
 
   const el = h('div', { class: 'player card', hidden: true },
     glow,
@@ -285,6 +353,7 @@ export function createPlayer(app, hooks) {
     coverBlank.hidden = Boolean(m.cover);
     if (m.cover && cover.src !== m.cover) cover.src = m.cover;
     glow.style.backgroundImage = m.cover ? `url("${m.cover}")` : 'none';
+    paintTint(m.cover || '');
     clear(btnPlay, icon(m.playing ? 'pause' : 'play', 17, 2.4));
     btnPrev.disabled = !m.canPrev;
     btnNext.disabled = !m.canNext;

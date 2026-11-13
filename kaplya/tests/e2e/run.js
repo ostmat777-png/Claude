@@ -169,9 +169,54 @@ async function main() {
     await k.helper('media.cmd', { action: 'seek', position: 42 });
     await k.open('home');
     await until(async () => (await text(k, '.player-title')) === 'Тёплый берег', 'track title');
-    assert.equal(await text(k, '.player-artist'), 'Прибой');
+    assert.equal(await text(k, '.player-artist'), 'Прибой · MockPlayer');
     await until(async () => (await k.page.locator('.player-lyrics:not([hidden])').count()) === 1, 'lyrics');
     await until(async () => /тёплого берега/.test(await text(k, '.lyric.now')), 'the line being sung at 0:42');
+
+    // the card takes the colour of the cover (orange to violet)
+    await until(async () => (await k.page.getAttribute('.player', 'class')).includes('tinted'), 'tinted card');
+    const tint = await k.page.evaluate(() => getComputedStyle(document.querySelector('.player')).getPropertyValue('--tint'));
+    const [tr, , tb] = tint.match(/\d+/g).map(Number);
+    assert.ok(tr > 60 || tb > 60, 'a real colour, not grey: ' + tint);
+
+    // the words open up: the whole song, the line being sung marked
+    await k.page.click('.player-lyrics');
+    await k.page.waitForSelector('.lyrics-full .lline');
+    assert.equal(await k.page.locator('.lyrics-full .lline').count(), 7);
+    await until(async () => /тёплого берега/.test(await text(k, '.lline.now')), 'current line marked');
+    assert.equal(await k.page.locator('.recent[hidden]').count(), 1, 'the clipboard makes room');
+    await k.settle(400);
+    await k.shot('home-lyrics');
+    // a line can be clicked to jump there
+    await k.page.locator('.lline', { hasText: 'Где время течёт' }).click();
+    await until(async () => { const st = await k.helper('mock.state'); return st.playing && true; }, 'still playing');
+    await until(async () => /Где время течёт/.test(await text(k, '.lline.now')), 'jumped to the clicked line');
+    await k.page.click('.stage-head button[title="Свернуть"]');
+    await k.page.waitForSelector('.lyrics-full', { state: 'detached' });
+
+    // the heart: the track goes to the liked list, and stays after a restart
+    await k.page.click('.player-like');
+    assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'true');
+    assert.equal(await text(k, '.like-count'), '1');
+    await k.page.click('.player-likes');
+    await k.page.waitForSelector('.likes-list .like');
+    assert.match(await text(k, '.likes-list .like'), /Тёплый берег.*Прибой/);
+    await k.settle(400);
+    await k.shot('home-likes');
+    assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('likes'))).length, 1);
+    await k.page.click('.player-like');
+    await until(async () => (await k.page.locator('.likes-list .like').count()) === 0, 'unliked');
+    await k.page.click('.stage-head button[title="Свернуть"]');
+
+    // a second player (a browser tab): it can be chosen
+    await k.helper('mock.set', { second: true });
+    await until(async () => (await k.page.locator('.player-sources:not([hidden]) .chip').count()) === 2, 'two sources', 8000);
+    await k.page.locator('.player-sources .chip', { hasText: 'Google Chrome' }).click();
+    await until(async () => (await text(k, '.player-title')) === 'Lo-fi beats to study to', 'the browser tab followed');
+    assert.match(await text(k, '.player-artist'), /Lofi Girl · Google Chrome/);
+    await k.page.locator('.player-sources .chip', { hasText: 'MockPlayer' }).click();
+    await until(async () => (await text(k, '.player-title')) === 'Тёплый берег', 'back to the program');
+    await k.helper('mock.set', { second: false });
     assert.equal(await k.page.locator('.tools .tool').count(), 8);
     await k.shot('home');
 
@@ -196,6 +241,54 @@ async function main() {
     await k.leave();
     await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 3000 });
     assert.equal(await k.page.locator('#pill-left img').count(), 0);
+  });
+
+  await scenario('programs row: sites, File Explorer, files and folders, with their own icons', {}, async (k) => {
+    const dir = tmpDir('apps');
+    const pic = path.join(dir, 'Обложка.png');
+    fs.copyFileSync(path.join(__dirname, '..', 'fixtures', 'qr.png'), pic);
+    await k.open('home');
+    assert.match(await text(k, '.apps-hint'), /программы, папки и сайты/);
+    await k.page.click('.app.add');
+    await k.page.waitForSelector('.apps-add:not([hidden])');
+    // a site: a wrong address is said, a right one is added
+    await k.page.fill('.apps-add input[aria-label="Адрес сайта"]', 'не адрес');
+    await k.page.click('.apps-add button[data-add="url"]');
+    await until(async () => /Не похоже на адрес/.test(await text(k, '.apps-note')), 'bad address said');
+    await k.page.fill('.apps-add input[aria-label="Адрес сайта"]', 'music.yandex.ru');
+    await k.page.fill('.apps-add input[aria-label="Название"]', 'Яндекс Музыка');
+    await k.page.press('.apps-add input[aria-label="Название"]', 'Enter');
+    await until(async () => (await k.page.locator('.apps-row .app[data-kind="url"]').count()) === 1, 'site added');
+    assert.equal(await k.page.getAttribute('.apps-row .app[data-kind="url"]', 'title'), 'Яндекс Музыка\nhttps://music.yandex.ru/');
+    // no icon from the site here (no internet in tests): a coloured letter stands in
+    assert.equal(await text(k, '.apps-row .app[data-kind="url"] .app-letter'), 'Я');
+    // File Explorer
+    await k.page.click('.app.add');
+    await k.page.click('.apps-add button[data-add="explorer"]');
+    await until(async () => (await k.page.locator('.apps-row .app[data-kind="explorer"]').count()) === 1, 'File Explorer added');
+    // a file and a folder (what dropping them on the row does)
+    await k.page.evaluate((p) => window.kaplya.invoke('apps:addPath', p), pic);
+    await k.page.evaluate((p) => window.kaplya.invoke('apps:addPath', p), dir);
+    await until(async () => (await k.page.locator('.apps-row .app').count()) === 5, 'four items and the add button');
+    assert.equal(await k.page.locator('.apps-row .app[data-kind="folder"]').count(), 1);
+    // the picture shows itself, not a generic icon
+    await until(async () => (await k.page.locator('.apps-row .app[data-kind="file"] img').count()) === 1, 'file picture');
+    await k.settle(400);
+    await k.shot('home-apps');
+    // order can be changed, and the row survives a restart
+    const ids = await k.page.$$eval('.apps-row .app[data-id]', (els) => els.map((e) => e.dataset.kind));
+    assert.deepEqual(ids, ['url', 'explorer', 'file', 'folder']);
+    await k.page.evaluate(() => window.kaplya.invoke('apps:move', 'explorer', 0));
+    const stored = await k.main(() => globalThis.__kaplyaTest.store.get('apps'));
+    assert.deepEqual(stored.map((a) => a.kind), ['explorer', 'url', 'file', 'folder']);
+    // remove one
+    await k.page.locator('.apps-row .app[data-kind="folder"]').hover();
+    await k.page.locator('.apps-row .app[data-kind="folder"] .app-remove').click();
+    await until(async () => (await k.page.locator('.apps-row .app[data-kind="folder"]').count()) === 0, 'folder removed');
+    // an old saved row ({ path, name } only) still works
+    await k.main(() => globalThis.__kaplyaTest.store.set('apps', [{ path: '/usr/bin/env', name: 'env' }]));
+    await until(async () => (await k.page.locator('.apps-row .app[data-kind="file"]').count()) === 1, 'old-style entry shown');
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // ------------------------------------------------------------------ clipboard
@@ -302,7 +395,8 @@ async function main() {
 
     // reminder: understood as typed, then fires
     await k.page.fill('.reminders input', 'через 20 минут позвонить Ане');
-    assert.match(await text(k, '.remind-hint'), /Напомню сегодня в \d{1,2}:\d\d: позвонить Ане/);
+    // "сегодня" or, close to midnight, "завтра"
+    assert.match(await text(k, '.remind-hint'), /Напомню (сегодня|завтра) в \d{1,2}:\d\d: позвонить Ане/);
     await k.page.press('.reminders input', 'Enter');
     assert.equal(await k.page.locator('.remind').count(), 1);
     await k.page.fill('.reminders input', 'какая-то ерунда');

@@ -21,6 +21,7 @@ const state = {
   startedAt: Date.now() - 42000,
   pausedAt: 0,
   hasMedia: process.env.MOCK_NO_MEDIA !== '1',
+  second: false, // a browser tab playing too
   volume: { available: true, level: 0.62, muted: false },
   dark: true,
   fullscreen: false,
@@ -43,7 +44,13 @@ function position() {
   return Math.min(p, t.duration);
 }
 
-function media(have) {
+const browserTrack = { title: 'Lo-fi beats to study to', artist: 'Lofi Girl', album: '', duration: 0 };
+
+function media(have, appId) {
+  if (state.second && appId === 'chrome.exe') {
+    const now = Date.now();
+    return { app: 'chrome.exe', ...browserTrack, status: 'Playing', position: 12, duration: 600, updated: now, now, key: 'chrome|lofi', canPrev: false, canNext: true, canSeek: true };
+  }
   if (!state.hasMedia) return null;
   const t = tracks[state.track];
   const key = `mock|${t.title}|${t.artist}|${t.album}`;
@@ -63,8 +70,13 @@ function run(cmd, a) {
   switch (cmd) {
     case 'ping': return { pong: true, windows: true, ps: 'mock' };
     case 'echo': return a;
-    case 'media.get': return media(a.have);
-    case 'media.sessions': return { sessions: state.hasMedia ? [{ ...media('*'), current: true }] : [] };
+    case 'media.get': return media(a.have, a.app);
+    case 'media.sessions': {
+      const list = state.hasMedia ? [{ ...media('*'), current: true }] : [];
+      if (state.second) list.push({ ...media('*', 'chrome.exe'), current: false });
+      for (const s of list) delete s.thumb;
+      return { sessions: list };
+    }
     case 'media.cmd': {
       if (!state.hasMedia) return false;
       if (a.action === 'toggle' || a.action === 'play' || a.action === 'pause') {
