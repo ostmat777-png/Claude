@@ -51,6 +51,7 @@ const DEFAULTS = {
     translate: { to: '' }, // the last language translated into
     musicSearch: 'yandex', // where "find this track" opens: yandex | vk | youtube | ytmusic | spotify
     chat: { service: 'deepseek', custom: '' },
+    music: { service: '', reopen: true }, // the music service open inside the island
     ocrLang: '',
   },
   tab: 'home',

@@ -43,9 +43,21 @@ const APP_NAMES = [
 ];
 
 /** "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify" -> "Spotify". */
+export const MUSIC_SERVICES = [
+  { id: 'yandex', name: 'Яндекс Музыка', url: 'https://music.yandex.ru/' },
+  { id: 'vk', name: 'VK Музыка', url: 'https://vk.com/audio' },
+  { id: 'ytmusic', name: 'YouTube Music', url: 'https://music.youtube.com/' },
+  { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/' },
+  { id: 'soundcloud', name: 'SoundCloud', url: 'https://soundcloud.com/discover' },
+];
+
 export function appLabel(id) {
   const s = String(id || '');
   if (!s) return '';
+  if (s.startsWith('kaplya:web')) {
+    const svc = MUSIC_SERVICES.find((x) => x.id === s.slice('kaplya:web:'.length));
+    return 'Капля · ' + (svc ? svc.name : 'Плеер');
+  }
   for (const [re, name] of APP_NAMES) if (re.test(s)) return name;
   const tail = s.split(/[!\\/]/).pop().replace(/\.exe$/i, '');
   const last = tail.includes('.') && !/\s/.test(tail) ? tail.split('.').pop() : tail;

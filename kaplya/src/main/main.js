@@ -881,7 +881,37 @@ function registerIpc() {
   handle('media:cmd', (action, position) => system.mediaCommand(String(action), Number(position) || 0));
   handle('volume:set', (change) => system.setVolume(change || {}).catch(() => system.volume));
   handle('lyrics:get', (track) => (store.get('settings.lyrics') === false ? null : netApi.lyrics(track || {})));
-  handle('media:sessions', () => helper.tryCall('media.sessions', {}, { sessions: [] }, 8000));
+  handle('media:sessions', async () => {
+    const r = await helper.tryCall('media.sessions', {}, { sessions: [] }, 8000);
+    return { sessions: system.sessions((r && r.sessions) || []) };
+  });
+  // the music service inside the island: what it plays, and its cover
+  const webCovers = new Map();
+  listen('webmedia:state', async (state) => {
+    if (!state || typeof state !== 'object') return system.setWeb(null);
+    const clean = {
+      service: String(state.service || '').slice(0, 40),
+      title: String(state.title || '').slice(0, 300),
+      artist: String(state.artist || '').slice(0, 300),
+      album: String(state.album || '').slice(0, 300),
+      art: /^https:\/\//i.test(String(state.art || '')) ? String(state.art) : '',
+      playing: Boolean(state.playing),
+      position: Number(state.position) || 0,
+      duration: Number(state.duration) || 0,
+    };
+    let cover = clean.art ? webCovers.get(clean.art) : null;
+    system.setWeb(clean, cover || null);
+    if (clean.art && cover === undefined) {
+      webCovers.set(clean.art, null);
+      try {
+        cover = await netApi.imageDataUrl(clean.art);
+        webCovers.set(clean.art, cover);
+        if (webCovers.size > 40) webCovers.delete(webCovers.keys().next().value);
+        if (system.web && system.web.state.art === clean.art) system.web.cover = cover;
+      } catch {}
+    }
+    return undefined;
+  });
   handle('media:follow', (id) => system.follow(String(id || '')));
 
   // --- clipboard
@@ -1222,7 +1252,9 @@ function hardenWebContents() {
       webPreferences.nodeIntegration = false;
       webPreferences.contextIsolation = true;
       webPreferences.sandbox = true;
-      if (!/^https:\/\//i.test(String(params.src || ''))) event.preventDefault();
+      const src = String(params.src || '');
+      // web pages only; tests also use small pages of their own
+      if (!/^https:\/\//i.test(src) && src !== 'about:blank' && !(TEST && /^data:text\/html/i.test(src))) event.preventDefault();
     });
     if (contents.getType() === 'webview') {
       // Sign-in pop-ups must share the chat's cookies; they open as small windows.
@@ -1339,6 +1371,9 @@ async function main() {
   helper = new WinHelper({ script: helperScript, command: helperCmd });
   system = new SystemWatch(helper, {
     ownPids: [process.pid],
+    // Our own music service may also appear in Windows' list of players; it is
+    // shown once, as the island's own.
+    isOwnApp: (id) => /kaplya|^electron/i.test(String(id || '')),
     findCover: (track) => (store.get('settings.coverSearch') === false ? null : netApi.cover(track)),
   });
   clips = new ClipWatch(
@@ -1392,6 +1427,7 @@ async function main() {
     }
   });
   system.on('volume', (v) => broadcast('sys:volume', v));
+  system.on('webcmd', (action, position) => sendIsland('webmedia:cmd', String(action), Number(position) || 0));
   system.on('poll', (r) => activity.sample(r));
   system.on('theme', (dark) => broadcast('sys:theme', dark));
   system.on('fullscreen', (full) => sendIsland('island:fullscreen', full && store.get('settings.hideOnFullscreen') !== false));

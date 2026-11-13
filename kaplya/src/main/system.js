@@ -25,10 +25,71 @@ class SystemWatch extends EventEmitter {
     this.busy = { media: false, sys: false };
     this.volumeHold = 0;
     this.mediaSeen = false; // becomes true after the first look at the player
+    this.web = null; // what the music service inside the island is playing: { state, at, cover }
+    this.isOwnApp = opts.isOwnApp || (() => false); // our own entry in Windows' list of players
+  }
+
+  /**
+   * The music service open inside the island reports what it plays. It counts as
+   * one more player, "kaplya:web".
+   */
+  setWeb(state, cover) {
+    if (!state || (!state.title && !state.playing)) {
+      this.web = null;
+    } else {
+      this.web = { state, at: Date.now(), cover: cover || (this.web && this.web.state.art === state.art ? this.web.cover : null) };
+    }
+    if (!this.helper.supported) this.pollMedia();
+  }
+
+  webRaw() {
+    const w = this.web;
+    if (!w || Date.now() - w.at > 5000) return null;
+    const s = w.state;
+    const now = Date.now();
+    return {
+      app: 'kaplya:web:' + (s.service || 'music'),
+      title: String(s.title || ''),
+      artist: String(s.artist || ''),
+      album: String(s.album || ''),
+      status: s.playing ? 'Playing' : 'Paused',
+      position: Number(s.position) || 0,
+      duration: Number(s.duration) || 0,
+      updated: w.at,
+      now,
+      key: `kaplya:web|${s.title}|${s.artist}`,
+      canPrev: true,
+      canNext: true,
+      canSeek: Boolean(s.duration),
+      thumbUrl: w.cover || null,
+      thumbNote: w.cover ? '' : 'none',
+    };
+  }
+
+  /** Which of the two to show: what Windows reports, or the island's own music service. */
+  choose(helperRaw) {
+    const own = helperRaw && this.isOwnApp(helperRaw.app) ? null : helperRaw;
+    const web = this.webRaw();
+    if (this.followApp.startsWith('kaplya:web')) return web || own;
+    if (this.followApp) return own || web;
+    if (web && web.status === 'Playing' && !(own && own.status === 'Playing')) return web;
+    return own || web;
+  }
+
+  /** Windows' list of players, plus the island's own. */
+  sessions(list) {
+    const out = (list || []).filter((x) => !this.isOwnApp(x.app));
+    const web = this.webRaw();
+    if (web) out.push({ app: web.app, title: web.title, artist: web.artist, status: web.status, current: false });
+    return out;
   }
 
   start() {
-    if (!this.helper.supported) return;
+    if (!this.helper.supported) {
+      // no Windows: only the island's own music service can play
+      this.timers.push(setInterval(() => this.pollMedia(), 1000));
+      return;
+    }
     this.helper.start();
     this.timers.push(setInterval(() => this.pollMedia(), 1000));
     this.timers.push(setInterval(() => this.pollSys(), 1500));
@@ -65,10 +126,14 @@ class SystemWatch extends EventEmitter {
       const c = this.cover;
       const ask = !c || c.from !== 'player' ? (!c || c.tries < 10 || c.tries % 5 === 0) : false;
       const have = c && !ask ? c.key : '';
-      const raw = await this.helper.call('media.get', { have, app: this.followApp || '' }, 8000);
-      this.applyMedia(raw);
+      let raw = null;
+      if (this.helper.supported) {
+        const app = this.followApp.startsWith('kaplya:web') ? '' : this.followApp;
+        raw = await this.helper.call('media.get', { have, app }, 8000).catch(() => null);
+      }
+      this.applyMedia(this.choose(raw));
     } catch {
-      this.applyMedia(null);
+      this.applyMedia(this.choose(null));
     } finally {
       this.busy.media = false;
     }
@@ -120,7 +185,12 @@ class SystemWatch extends EventEmitter {
       coverChanged = true;
     }
     const c = this.cover;
-    if (raw.thumb && raw.thumb.data) {
+    if (raw.thumbUrl) {
+      if (c.url !== raw.thumbUrl) coverChanged = true;
+      c.url = raw.thumbUrl;
+      c.from = 'player';
+      c.note = '';
+    } else if (raw.thumb && raw.thumb.data) {
       c.url = `data:${raw.thumb.mime || 'image/png'};base64,${raw.thumb.data}`;
       c.from = 'player';
       c.note = '';
@@ -190,6 +260,12 @@ class SystemWatch extends EventEmitter {
   }
 
   async mediaCommand(action, position) {
+    if (this.media && String(this.media.app).startsWith('kaplya:web')) {
+      // the island's own music service is driven from its page
+      this.emit('webcmd', action, position);
+      setTimeout(() => this.pollMedia(), 400);
+      return true;
+    }
     const ok = await this.helper.tryCall('media.cmd', { action, position, app: this.followApp || '' }, false);
     setTimeout(() => this.pollMedia(), 250);
     return ok;

@@ -2175,3 +2175,81 @@ button.wtile:hover .label .icon {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 16%, transparent);
 }
+
+/* ------------------------------------------------------------------ Плеер (a music service inside the island) */
+
+.view-music {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Away from this tab the page must keep running (and playing): it is moved out
+   of sight instead of being taken out of the layout. */
+.view-music[hidden] {
+  display: flex;
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 600px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.music-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.music-chips .chip {
+  gap: 6px;
+}
+
+.music-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+
+.music-stage {
+  position: relative;
+  height: 470px;
+  overflow: hidden;
+}
+
+.music-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 60px;
+  text-align: center;
+  line-height: 1.45;
+}
+
+.music-intro .icon {
+  color: var(--accent);
+}
+
+.music-intro[hidden] {
+  display: none;
+}
+
+/* every open service keeps its page; only the chosen one is in view */
+.music-frame {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+  visibility: hidden;
+}
+
+.music-frame.shown {
+  visibility: visible;
+}

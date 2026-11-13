@@ -349,6 +349,82 @@ async function main() {
     assert.equal((await k.page.evaluate(() => window.kaplya.invoke('activity:report', 'today'))).total, 0);
   });
 
+  // A pretend music service: a media session with a track, an audio element whose
+  // playing is pretended (a test machine may have no sound), and next/previous buttons.
+  const MUSIC_PAGE = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><title>Музыка</title>
+<body style="background:#123;color:#fff;font:16px sans-serif">
+<h1 id="t"></h1>
+<button aria-label="Предыдущий трек" onclick="go(-1)">⏮</button>
+<button aria-label="Следующий трек" onclick="go(1)">⏭</button>
+<audio id="a"></audio>
+<script>
+  const tracks = [['Полёт над морем', 'Северный ветер'], ['Огни города', 'Северный ветер']];
+  let i = 0, playing = false, pos = 30, ticks = 0;
+  window.__calls = [];
+  const a = document.getElementById('a');
+  Object.defineProperty(a, 'paused', { get: () => !playing });
+  Object.defineProperty(a, 'duration', { get: () => 200 });
+  Object.defineProperty(a, 'currentTime', { get: () => pos, set: (v) => { pos = v; window.__calls.push('seek:' + Math.round(v)); } });
+  a.play = () => { playing = true; window.__calls.push('play'); return Promise.resolve(); };
+  a.pause = () => { playing = false; window.__calls.push('pause'); };
+  function show() {
+    document.getElementById('t').textContent = tracks[i][0];
+    navigator.mediaSession.metadata = new MediaMetadata({ title: tracks[i][0], artist: tracks[i][1], album: 'Тест' });
+  }
+  function go(d) { i = (i + d + tracks.length) % tracks.length; pos = 0; window.__calls.push(d > 0 ? 'next' : 'prev'); show(); }
+  setInterval(() => { ticks++; if (playing) pos += 0.5; }, 500);
+  window.__ticks = () => ticks;
+  show();
+  a.play();
+</script></body>`);
+
+  await scenario('music service in the island: plays on after you leave, driven from the home tab', { env: { MOCK_NO_MEDIA: '1' } }, async (k) => {
+    await k.page.evaluate((u) => { window.__musicTestUrl = u; }, MUSIC_PAGE);
+    await k.open('music');
+    assert.match(await text(k, '.music-intro'), /Музыка прямо в острове/);
+    assert.equal(await k.page.locator('.music-chips .chip').count(), 5);
+    await k.page.locator('.music-chips .chip', { hasText: 'Яндекс Музыка' }).click();
+    await k.page.waitForSelector('.music-frame.shown');
+    const inPage = (js) => k.page.evaluate((code) => document.querySelector('.music-frame[data-service="yandex"]').executeJavaScript(code), js);
+    await until(async () => (await inPage('document.title').catch(() => '')) === 'Музыка', 'the service page to load', 15000);
+    assert.equal(await k.page.locator('.music-chips .chip.open').count(), 1, 'the open service is marked');
+
+    // the home tab's player shows it, as the island's own player
+    await k.open('home');
+    await until(async () => (await text(k, '.player-title').catch(() => '')) === 'Полёт над морем', 'the track on the home tab', 10000);
+    assert.match(await text(k, '.player-artist'), /Северный ветер · Капля · Яндекс Музыка/);
+    // and drives it: pause, next
+    await k.page.click('.player-play');
+    await until(async () => (await inPage('window.__calls')).includes('pause'), 'pause reached the page');
+    await k.page.click('.player-controls button[title="Следующий"]');
+    await until(async () => (await text(k, '.player-title')) === 'Огни города', 'next track via the page button');
+    assert.ok((await inPage('window.__calls')).includes('next'));
+    await k.page.click('.player-play');
+    await until(async () => (await inPage('window.__calls')).filter((c) => c === 'play').length >= 2, 'play again');
+
+    // leave: the island folds away; the page goes on running
+    await k.page.keyboard.press('Escape');
+    await k.leave();
+    await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 5000 });
+    const before = await inPage('window.__ticks()');
+    await sleep(2500);
+    const after = await inPage('window.__ticks()');
+    assert.ok(after - before >= 4, `the page kept running: ${before} -> ${after}`);
+    assert.equal(await inPage('document.querySelector("audio").paused'), false, 'still playing');
+    assert.equal(await k.page.locator('#pill-left img, #pill-left .pill-note').count(), 1, 'the pill shows the music');
+
+    // back to the tab: the same page, not a new one
+    await k.open('music');
+    assert.ok((await inPage('window.__ticks()')) > after, 'the very same page');
+    await k.settle(300);
+    await k.shot('music');
+    // Stop closes the service and the music
+    await k.page.click('#head-actions button[title="Остановить музыку и закрыть сервис"]');
+    await until(async () => (await k.page.locator('.music-frame').count()) === 0, 'page closed');
+    await k.open('home');
+    await until(async () => (await k.page.locator('.player[hidden]').count()) === 1, 'nothing playing any more', 8000);
+  });
+
   // ------------------------------------------------------------------ clipboard
   await scenario('clipboard: toast, history, copy again, pin, delete, search', {}, async (k) => {
     await sleep(700); // the first look at the clipboard is silent
