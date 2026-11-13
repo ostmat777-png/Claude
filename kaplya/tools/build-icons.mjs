@@ -25,6 +25,9 @@ grip-vertical signal list-checks case-sensitive braces binary sparkles navigatio
 rotate-ccw info triangle-alert mic-vocal arrow-right clipboard clipboard-paste shield-check eye-off
 mouse-pointer-2 blend circle-stop download wrap-text space arrow-down-a-z clock log-out layout-grid scissors
 sun-moon wand-sparkles files zap corner-down-left calendar-clock list bell-ring at-sign
+heart list-music chevron-up map layers folder link-2 arrow-left arrow-left-right maximize minimize-2 snowflake
+radio picture-in-picture-2 monitor-play square-check-big check-check ellipsis tv folder-plus eye circle-play
+expand shrink chart-line chart-no-axes-column mouse-pointer-click
 `.split(/\s+/).filter(Boolean);
 
 const icons = {};

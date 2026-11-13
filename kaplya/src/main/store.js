@@ -21,6 +21,7 @@ const DEFAULTS = {
     copyToast: true,
     trackToast: true,
     lyrics: true,
+    coverSearch: true, // look for a cover on the internet when the player gives none
     weather: { place: null, askedOnce: false },
     hotkeys: {
       palette: 'Alt+Space',
@@ -46,6 +47,7 @@ const DEFAULTS = {
     },
     clipboard: { limit: 60, images: true },
     search: 'google', // google | yandex | duckduckgo
+    musicSearch: 'yandex', // where "find this track" opens: yandex | vk | youtube | ytmusic | spotify
     chat: { service: 'deepseek', custom: '' },
     ocrLang: '',
   },
@@ -57,6 +59,7 @@ const DEFAULTS = {
   reminders: [],
   apps: [],
   shelf: [],
+  likes: [], // tracks marked with the heart
 };
 
 function isObject(v) {

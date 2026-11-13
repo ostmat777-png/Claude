@@ -1,6 +1,8 @@
 'use strict';
 // The few things the app asks the internet: weather (Open-Meteo), city search,
-// an optional "where am I" by IP, and song lyrics (LRCLIB). No keys, no accounts.
+// an optional "where am I" by IP, song lyrics (LRCLIB), and a cover picture for a
+// track whose player did not provide one (iTunes Search, then Deezer).
+// No keys, no accounts.
 
 const USER_AGENT = 'Kaplya/0.1 (desktop app)';
 
@@ -17,6 +19,34 @@ async function getJson(fetchFn, url, { timeoutMs = 10000, allow404 = false } = {
   }
 }
 
+/** "Song (Official Video) [HD] feat. X" -> "song": what is left to compare two titles by. */
+function plainTitle(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[\(\[][^\)\]]*[\)\]]/g, ' ')
+    .replace(/\b(feat|ft|featuring)\.?\s.*$/i, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+const words = (s) => new Set(plainTitle(s).split(' ').filter((w) => w.length > 1));
+
+/** Is this search result the track we asked about? Better no cover than a wrong one. */
+function sameTrack(want, got) {
+  const a = plainTitle(want.title);
+  const b = plainTitle(got.title);
+  if (!a || !b) return false;
+  if (!(a === b || a.includes(b) || b.includes(a))) return false;
+  const wa = words(want.artist);
+  if (!wa.size) return true;
+  const wb = words(got.artist);
+  for (const w of wa) if (wb.has(w)) return true;
+  // "Artist - Song" as the whole title (YouTube): the artist is inside the title
+  const wt = words(want.title);
+  for (const w of wb) if (wt.has(w)) return true;
+  return false;
+}
+
 class NetApi {
   /** @param {typeof fetch} fetchFn */
   constructor(fetchFn, shared) {
@@ -24,6 +54,78 @@ class NetApi {
     this.shared = shared; // { weather: module, lrc: module }
     this.weatherCache = null; // { key, data }
     this.lyricsCache = new Map();
+    this.coverCache = new Map();
+  }
+
+  /**
+   * A cover for a track, as a data: URL, or null. Asked only when the player gave none.
+   * @param {{ title: string, artist?: string, album?: string }} track
+   */
+  async cover(track) {
+    let title = String(track.title || '').trim();
+    let artist = String(track.artist || '').trim();
+    if (!title) return null;
+    // A video called "Artist - Song": the uploader's name is not the artist.
+    const split = /^(.{2,60}?)\s[-–—]\s(.{2,})$/.exec(title);
+    if (split) {
+      artist = split[1];
+      title = split[2];
+    }
+    const key = (artist + '|' + title).toLowerCase();
+    if (this.coverCache.has(key)) return this.coverCache.get(key);
+    const want = { title, artist };
+    let imageUrl = null;
+    let failed = false;
+    try {
+      const q = new URLSearchParams({ term: `${artist} ${plainTitle(title) || title}`.trim(), entity: 'song', limit: '8' });
+      const r = await getJson(this.fetch, 'https://itunes.apple.com/search?' + q, { timeoutMs: 7000 });
+      const hit = (r.results || []).find((x) => x.artworkUrl100 && sameTrack(want, { title: x.trackName, artist: x.artistName }));
+      if (hit) imageUrl = String(hit.artworkUrl100).replace(/\/\d+x\d+(bb)?\./, '/600x600bb.');
+    } catch {
+      failed = true;
+    }
+    if (!imageUrl) {
+      try {
+        const q = new URLSearchParams({ q: `${artist} ${plainTitle(title) || title}`.trim(), limit: '8' });
+        const r = await getJson(this.fetch, 'https://api.deezer.com/search?' + q, { timeoutMs: 7000 });
+        const hit = (r.data || []).find((x) => x.album && (x.album.cover_big || x.album.cover_medium) &&
+          sameTrack(want, { title: x.title_short || x.title, artist: x.artist && x.artist.name }));
+        if (hit) imageUrl = hit.album.cover_big || hit.album.cover_medium;
+      } catch {
+        failed = true;
+      }
+    }
+    let result = null;
+    if (imageUrl) {
+      try {
+        result = await this.imageDataUrl(imageUrl);
+      } catch {
+        failed = true;
+      }
+    }
+    // "nothing found" is remembered; "the network failed" is not, so it is tried again
+    if (result || !failed) {
+      this.coverCache.set(key, result);
+      if (this.coverCache.size > 80) this.coverCache.delete(this.coverCache.keys().next().value);
+    }
+    return result;
+  }
+
+  /** Downloads a picture and returns it as a data: URL. */
+  async imageDataUrl(url, maxBytes = 2 * 1024 * 1024) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 9000);
+    try {
+      const res = await this.fetch(url, { signal: ctl.signal, headers: { 'User-Agent': USER_AGENT } });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (!buf.length || buf.length > maxBytes) throw new Error('bad size');
+      let type = String((res.headers && res.headers.get && res.headers.get('content-type')) || '').split(';')[0].trim();
+      if (!/^image\//.test(type)) type = buf[0] === 0x89 ? 'image/png' : 'image/jpeg';
+      return `data:${type};base64,${buf.toString('base64')}`;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async weather(place, force = false) {
@@ -105,4 +207,4 @@ class NetApi {
   }
 }
 
-module.exports = { NetApi };
+module.exports = { NetApi, plainTitle, sameTrack };

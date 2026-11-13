@@ -184,6 +184,18 @@ namespace Kaplya {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterClipboardFormat(string name);
     [DllImport("user32.dll")] static extern bool IsClipboardFormatAvailable(uint format);
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern int SHDefExtractIcon(string file, int index, uint flags, out IntPtr large, IntPtr small, uint size);
+    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
+
+    // Icon number `index` of a program, library or .ico file, at the given size.
+    // A negative number is a resource identifier, the way shortcuts store it.
+    public static IntPtr ExtractIcon(string file, int index, int size) {
+      IntPtr h;
+      int hr = SHDefExtractIcon(file, index, 0, out h, IntPtr.Zero, (uint)size);
+      return hr == 0 ? h : IntPtr.Zero;
+    }
+
     // True when the clipboard carries data in the named format.
     public static bool ClipboardHas(string name) {
       uint f = RegisterClipboardFormat(name);
@@ -249,27 +261,60 @@ function Get-MediaSession($app) {
     return $mgr.GetCurrentSession()
 }
 
+# Why the last cover could not be read: '' when it was, 'none' when the player gave
+# no picture at all, otherwise the error text. Shown by -SelfTest.
+$script:ThumbNote = ''
+
+# The picture of the current track as bytes. Players hand it over as a WinRT
+# stream; two ways of reading it are tried, because each fails with some players.
 function Get-MediaThumb($ref) {
-    if ($null -eq $ref) { return $null }
-    try {
-        $streamT = Get-WinRtType 'Windows.Storage.Streams.IRandomAccessStreamWithContentType' 'Windows.Storage.Streams'
-        $stream = Wait-Op ($ref.OpenReadAsync()) $streamT 3000
-        $mime = [string]$stream.ContentType
-        $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream)
-        $ms = New-Object System.IO.MemoryStream
-        $net.CopyTo($ms)
-        $bytes = $ms.ToArray()
-        $net.Dispose()
-        $ms.Dispose()
-        if ($bytes.Length -eq 0 -or $bytes.Length -gt 4MB) { return $null }
-        if (-not $mime) { $mime = 'image/png' }
-        return @{ mime = $mime; data = [Convert]::ToBase64String($bytes) }
-    } catch {
+    if ($null -eq $ref) {
+        $script:ThumbNote = 'none'
         return $null
     }
+    $script:ThumbNote = ''
+    $bytes = $null
+    $mime = ''
+    try {
+        $streamT = Get-WinRtType 'Windows.Storage.Streams.IRandomAccessStreamWithContentType' 'Windows.Storage.Streams'
+        $stream = Wait-Op ($ref.OpenReadAsync()) $streamT 4000
+        try {
+            $mime = [string]$stream.ContentType
+            try {
+                $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStream($stream)
+                $ms = New-Object System.IO.MemoryStream
+                $net.CopyTo($ms)
+                $bytes = $ms.ToArray()
+                $ms.Dispose()
+            } catch {
+                $script:ThumbNote = 'AsStream: ' + (Get-ErrText $_)
+                $net = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($stream.GetInputStreamAt(0))
+                $ms = New-Object System.IO.MemoryStream
+                $net.CopyTo($ms)
+                $bytes = $ms.ToArray()
+                $ms.Dispose()
+                $script:ThumbNote = ''
+            }
+        } finally {
+            try { $stream.Dispose() } catch {}
+        }
+    } catch {
+        $script:ThumbNote = ($script:ThumbNote + ' ' + (Get-ErrText $_)).Trim()
+        return $null
+    }
+    if ($null -eq $bytes -or $bytes.Length -eq 0) {
+        $script:ThumbNote = 'empty'
+        return $null
+    }
+    if ($bytes.Length -gt 6MB) {
+        $script:ThumbNote = 'too big'
+        return $null
+    }
+    if (-not $mime) { $mime = 'image/png' }
+    return @{ mime = $mime; data = [Convert]::ToBase64String($bytes) }
 }
 
-function Get-MediaInfo($s, $have) {
+function Get-MediaInfo($s, $have, $noThumb) {
     $propsT = Get-WinRtType 'Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties' 'Windows.Media.Control'
     $p = Wait-Op ($s.TryGetMediaPropertiesAsync()) $propsT 4000
     $info = $s.GetPlaybackInfo()
@@ -304,7 +349,10 @@ function Get-MediaInfo($s, $have) {
         $res.canNext = [bool]$info.Controls.IsNextEnabled
         $res.canSeek = [bool]$info.Controls.IsPlaybackPositionEnabled
     } catch {}
-    if ([string]$have -ne $key) { $res.thumb = Get-MediaThumb $p.Thumbnail }
+    if (-not $noThumb -and [string]$have -ne $key) {
+        $res.thumb = Get-MediaThumb $p.Thumbnail
+        $res.thumbNote = [string]$script:ThumbNote
+    }
     return $res
 }
 
@@ -322,8 +370,7 @@ function Invoke-MediaSessions($a) {
     $list = @()
     foreach ($s in @($mgr.GetSessions())) {
         try {
-            $i = Get-MediaInfo $s '*'
-            $i.Remove('thumb')
+            $i = Get-MediaInfo $s '' $true
             $i.current = ($i.app -eq $curApp)
             $list += $i
         } catch {}
@@ -617,6 +664,30 @@ function Invoke-AppsList($a) {
     return @{ apps = @($list) }
 }
 
+# ---------------------------------------------------------------- icons
+
+function Invoke-IconExtract($a) {
+    Initialize-Native
+    Add-Type -AssemblyName System.Drawing
+    $size = 64
+    if ($a.size) { $size = [int]$a.size }
+    $h = [Kaplya.Win]::ExtractIcon([string]$a.path, [int]$a.index, $size)
+    if ($h -eq [IntPtr]::Zero) { throw 'no-icon' }
+    try {
+        $icon = [System.Drawing.Icon]::FromHandle($h)
+        $bmp = $icon.ToBitmap()
+        $ms = New-Object System.IO.MemoryStream
+        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bytes = $ms.ToArray()
+        $width = $bmp.Width
+        $ms.Dispose()
+        $bmp.Dispose()
+        return @{ data = [Convert]::ToBase64String($bytes); size = $width }
+    } finally {
+        [Kaplya.Win]::DestroyIcon($h) | Out-Null
+    }
+}
+
 # ---------------------------------------------------------------- power
 
 function Invoke-Power($a) {
@@ -659,6 +730,7 @@ function Invoke-Cmd([string]$cmd, $a) {
         'clip.seq' { return Invoke-ClipSeq $a }
         'clip.info' { return Invoke-ClipInfo $a }
         'apps.list' { return Invoke-AppsList $a }
+        'icon.extract' { return Invoke-IconExtract $a }
         default { throw "unknown command: $cmd" }
     }
 }
@@ -668,6 +740,8 @@ if ($SelfTest) {
     foreach ($c in @('ping', 'sys.poll', 'volume.get', 'media.get', 'media.sessions', 'radio.get', 'wifi.list', 'ocr.langs', 'clip.seq', 'clip.info', 'apps.list')) {
         try {
             $r = Invoke-Cmd $c (New-Object PSObject)
+            # a cover is thousands of characters: say how big it is instead
+            if ($r -is [hashtable] -and $r.thumb) { $r.thumb = @{ mime = $r.thumb.mime; base64Length = $r.thumb.data.Length } }
             $shown = ConvertTo-AsciiJson @{ result = $r }
             if ($shown.Length -gt 400) { $shown = $shown.Substring(0, 400) + ' ... (' + $shown.Length + ' characters)' }
             [Console]::Out.WriteLine("OK   $c  $shown")

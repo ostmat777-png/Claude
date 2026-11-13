@@ -15,8 +15,9 @@ class SystemWatch extends EventEmitter {
     this.helper = helper;
     this.ownPids = opts.ownPids || [process.pid];
     this.media = null;
-    this.cover = null; // { key, url }
-    this.coverTries = 0;
+    this.cover = null; // { key, url, from: 'player' | 'web' | null, tries, asked, note }
+    this.findCover = opts.findCover || null; // async (track) => data URL or null
+    this.followApp = '';
     this.volume = { available: false, level: 0, muted: false };
     this.dark = false;
     this.fullscreen = false;
@@ -42,7 +43,11 @@ class SystemWatch extends EventEmitter {
 
   snapshot() {
     return {
-      media: this.media ? { ...this.media, cover: this.cover && this.cover.key === this.media.key ? this.cover.url : null } : null,
+      media: this.media ? {
+        ...this.media,
+        cover: this.cover && this.cover.key === this.media.key ? this.cover.url : null,
+        coverFrom: this.cover && this.cover.key === this.media.key ? this.cover.from : null,
+      } : null,
       volume: this.volume,
       dark: this.dark,
       fullscreen: this.fullscreen,
@@ -54,16 +59,25 @@ class SystemWatch extends EventEmitter {
     if (this.busy.media) return;
     this.busy.media = true;
     try {
-      // Ask for the cover only while we do not have it for this track. Players often
-      // publish the picture a moment after the title, so a few polls may be needed.
-      const have = this.cover && this.coverTries >= 0 ? this.cover.key : '';
-      const raw = await this.helper.call('media.get', { have }, 8000);
+      // Ask for the picture only while we do not have the player's own one. Players
+      // often publish it a moment after the title, and some much later, so keep
+      // asking: every second at first, then now and then.
+      const c = this.cover;
+      const ask = !c || c.from !== 'player' ? (!c || c.tries < 10 || c.tries % 5 === 0) : false;
+      const have = c && !ask ? c.key : '';
+      const raw = await this.helper.call('media.get', { have, app: this.followApp || '' }, 8000);
       this.applyMedia(raw);
     } catch {
       this.applyMedia(null);
     } finally {
       this.busy.media = false;
     }
+  }
+
+  /** Follow this program's player instead of the one Windows calls current ('' = automatic). */
+  follow(app) {
+    this.followApp = String(app || '');
+    this.pollMedia();
   }
 
   applyMedia(raw) {
@@ -99,31 +113,42 @@ class SystemWatch extends EventEmitter {
       canNext: raw.canNext !== false,
       canSeek: Boolean(raw.canSeek),
     };
+
     let coverChanged = false;
     if (!this.cover || this.cover.key !== raw.key) {
-      if (raw.thumb && raw.thumb.data) {
-        this.cover = { key: raw.key, url: `data:${raw.thumb.mime || 'image/png'};base64,${raw.thumb.data}` };
-        this.coverTries = 0;
-        coverChanged = true;
-      } else {
-        // No picture yet: keep asking for a while, then accept that there is none.
-        this.coverTries += 1;
-        if (this.coverTries > 8) {
-          this.cover = { key: raw.key, url: null };
-          this.coverTries = 0;
-          coverChanged = true;
-        }
+      this.cover = { key: raw.key, url: null, from: null, tries: 0, asked: false, note: '' };
+      coverChanged = true;
+    }
+    const c = this.cover;
+    if (raw.thumb && raw.thumb.data) {
+      c.url = `data:${raw.thumb.mime || 'image/png'};base64,${raw.thumb.data}`;
+      c.from = 'player';
+      c.note = '';
+      coverChanged = true;
+    } else if (c.from !== 'player') {
+      if ('thumb' in raw || raw.thumbNote !== undefined) c.note = String(raw.thumbNote || '');
+      c.tries += 1;
+      // Three seconds without a picture from the player: look for one on the internet.
+      if (c.tries >= 3 && !c.asked && this.findCover) {
+        c.asked = true;
+        const key = raw.key;
+        Promise.resolve(this.findCover(next)).then((url) => {
+          if (!url || !this.cover || this.cover.key !== key || this.cover.from === 'player') return;
+          this.cover.url = url;
+          this.cover.from = 'web';
+          if (this.media && this.media.key === key) this.emit('media', { ...this.media, cover: url, coverFrom: 'web' }, { trackChanged: false });
+        }).catch(() => {});
       }
     }
+
     const prev = this.media;
     const trackChanged = !prev || prev.key !== next.key;
     const stateChanged = trackChanged || prev.playing !== next.playing || prev.duration !== next.duration ||
       prev.canSeek !== next.canSeek || Math.abs((prev.position + (prev.playing ? (next.at - prev.at) / 1000 : 0)) - next.position) > 1.5;
     this.media = next;
     if (stateChanged || coverChanged) {
-      const cover = this.cover && this.cover.key === next.key ? this.cover.url : null;
       // What was already playing when the app started is not news.
-      this.emit('media', { ...next, cover }, { trackChanged: trackChanged && !first });
+      this.emit('media', { ...next, cover: c.url, coverFrom: c.from }, { trackChanged: trackChanged && !first });
     }
   }
 
@@ -164,7 +189,7 @@ class SystemWatch extends EventEmitter {
   }
 
   async mediaCommand(action, position) {
-    const ok = await this.helper.tryCall('media.cmd', { action, position }, false);
+    const ok = await this.helper.tryCall('media.cmd', { action, position, app: this.followApp || '' }, false);
     setTimeout(() => this.pollMedia(), 250);
     return ok;
   }

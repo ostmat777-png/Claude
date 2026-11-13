@@ -127,6 +127,16 @@ async function main() {
       assert.strictEqual(typeof r, 'number');
       return r;
     });
+    await check('icon.extract cuts an icon out of a system library', async () => {
+      const lib = require('node:path').join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'shell32.dll');
+      const r = await helper.call('icon.extract', { path: lib, index: 3, size: 64 }, 30000);
+      const png = Buffer.from(r.data, 'base64');
+      assert.strictEqual(png.subarray(1, 4).toString('latin1'), 'PNG');
+      assert.ok(png.length > 300, 'a real picture: ' + png.length + ' bytes');
+      assert.ok(r.size >= 32, 'size ' + r.size);
+      await assert.rejects(helper.call('icon.extract', { path: 'C:\\no\\such\\file.dll', index: 0 }), /no-icon/);
+      return { bytes: png.length, size: r.size };
+    });
     await check('clip.info', async () => {
       const r = await helper.call('clip.info');
       assert.strictEqual(typeof r.seq, 'number');

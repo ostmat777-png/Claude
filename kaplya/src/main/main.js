@@ -23,6 +23,7 @@ const { Wifi } = require('./wifi.js');
 const { Launcher } = require('./launcher.js');
 const { ObsClient, ObsControl } = require('./obs.js');
 const secret = require('./secret.js');
+const { Icons } = require('./icons.js');
 
 const TEST = process.env.KAPLYA_TEST === '1';
 // Tests start from an empty profile every time; the first-start greeting would get
@@ -56,6 +57,7 @@ if (!TEST && !app.requestSingleInstanceLock()) {
 /** @type {Wifi} */ let wifi;
 /** @type {Launcher} */ let launcher;
 /** @type {ObsControl} */ let obs;
+/** @type {Icons} */ let icons;
 let shared = {};
 
 /** @type {BrowserWindow|null} */ let island = null;
@@ -360,6 +362,28 @@ function describeFile(file) {
   } catch {
     return null;
   }
+}
+
+// ------------------------------------------------------------------ the row of programs on the home tab
+
+/** The saved list, in today's shape (older versions stored only { path, name }). */
+function appsList() {
+  const raw = store.get('apps');
+  const out = [];
+  for (const a of Array.isArray(raw) ? raw : []) {
+    if (!a || typeof a !== 'object') continue;
+    const kind = ['file', 'folder', 'url', 'explorer'].includes(a.kind) ? a.kind : 'file';
+    const item = { id: String(a.id || a.path || a.url || ''), kind, path: String(a.path || ''), url: String(a.url || ''), name: String(a.name || '') };
+    if (item.id && !out.some((x) => x.id === item.id)) out.push(item);
+  }
+  return out;
+}
+
+function appsAdd(item) {
+  const list = appsList();
+  if (list.some((a) => a.id === item.id)) return;
+  list.push({ path: '', url: '', ...item });
+  store.set('apps', list.slice(0, 40));
 }
 
 // ------------------------------------------------------------------ screen capture
@@ -805,7 +829,7 @@ function checkReminders() {
 
 // ------------------------------------------------------------------ IPC
 
-const STORE_KEYS = ['tab', 'notes', 'activeNote', 'reminders', 'apps', 'shelf'];
+const STORE_KEYS = ['tab', 'notes', 'activeNote', 'reminders', 'apps', 'shelf', 'likes'];
 const storeKeyAllowed = (key) => typeof key === 'string' && (key.startsWith('settings.') || STORE_KEYS.includes(key));
 
 function registerIpc() {
@@ -854,6 +878,8 @@ function registerIpc() {
   handle('media:cmd', (action, position) => system.mediaCommand(String(action), Number(position) || 0));
   handle('volume:set', (change) => system.setVolume(change || {}).catch(() => system.volume));
   handle('lyrics:get', (track) => (store.get('settings.lyrics') === false ? null : netApi.lyrics(track || {})));
+  handle('media:sessions', () => helper.tryCall('media.sessions', {}, { sessions: [] }, 8000));
+  handle('media:follow', (id) => system.follow(String(id || '')));
 
   // --- clipboard
   handle('clip:list', () => clips.list());
@@ -981,30 +1007,101 @@ function registerIpc() {
     return Boolean(res);
   });
 
-  // --- pinned programs on the home tab
+  // --- the row of programs, folders and links on the home tab
+  handle('apps:list', () => appsList());
+  handle('apps:pickFile', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Добавить на остров',
+      properties: ['openFile', 'multiSelections', 'dontAddToRecent'],
+      filters: [{ name: 'Программы, ярлыки и файлы', extensions: ['*'] }],
+    });
+    if (res.canceled) return appsList();
+    for (const file of res.filePaths) {
+      appsAdd({ id: file, kind: 'file', path: file, name: path.basename(file).replace(/\.(exe|lnk|url|bat|cmd|appref-ms)$/i, '') });
+    }
+    return appsList();
+  });
+  handle('apps:pickFolder', async () => {
+    const res = await dialog.showOpenDialog({ title: 'Добавить папку на остров', properties: ['openDirectory'] });
+    if (res.canceled) return appsList();
+    for (const dir of res.filePaths) appsAdd({ id: dir, kind: 'folder', path: dir, name: path.basename(dir) || dir });
+    return appsList();
+  });
+  handle('apps:addPath', (file) => {
+    const info = describeFile(String(file || ''));
+    if (!info) return appsList();
+    appsAdd({ id: info.path, kind: info.dir ? 'folder' : 'file', path: info.path, name: info.name.replace(/\.(exe|lnk|url|bat|cmd|appref-ms)$/i, '') });
+    return appsList();
+  });
+  handle('apps:addUrl', (address, name) => {
+    let url = String(address || '').trim();
+    if (!url) throw new Error('empty');
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = 'https://' + url;
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error('bad-url');
+    }
+    if (!/^https?:$/.test(parsed.protocol) || !parsed.hostname.includes('.')) throw new Error('bad-url');
+    appsAdd({ id: 'url:' + parsed.href, kind: 'url', url: parsed.href, name: String(name || '').trim() || parsed.hostname.replace(/^www\./, '') });
+    return appsList();
+  });
+  handle('apps:addExplorer', () => {
+    appsAdd({ id: 'explorer', kind: 'explorer', name: 'Проводник' });
+    return appsList();
+  });
+  handle('apps:remove', (id) => {
+    store.set('apps', appsList().filter((a) => a.id !== id));
+    return appsList();
+  });
+  handle('apps:move', (id, toIndex) => {
+    const list = appsList();
+    const from = list.findIndex((a) => a.id === id);
+    if (from < 0) return list;
+    const [item] = list.splice(from, 1);
+    list.splice(clamp(Math.round(Number(toIndex)) || 0, 0, list.length), 0, item);
+    store.set('apps', list);
+    return list;
+  });
+  handle('apps:open', async (id) => {
+    const item = appsList().find((a) => a.id === id);
+    if (!item) return false;
+    if (item.kind === 'url') {
+      openExternal(item.url);
+      return true;
+    }
+    if (item.kind === 'explorer') {
+      if (process.platform !== 'win32') return (await shell.openPath(app.getPath('home'))) === '';
+      try {
+        spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return (await shell.openPath(item.path)) === '';
+  });
+  handle('apps:icon', async (id) => {
+    const item = appsList().find((a) => a.id === id);
+    if (!item) return null;
+    if (item.kind === 'url') return icons.forSite(item.url);
+    if (item.kind === 'explorer') return icons.forFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe'));
+    if (item.kind === 'folder') return (await icons.thumbnail(item.path, 96)) || icons.forFile(item.path);
+    return icons.forFile(item.path);
+  });
+  handle('file:thumb', (file) => icons.forShelf(String(file)));
+  handle('file:icon', (file) => icons.forFile(String(file)));
   handle('apps:pick', async () => {
     const res = await dialog.showOpenDialog({
       title: 'Добавить программу на остров',
-      properties: ['openFile'],
+      properties: ['openFile', 'dontAddToRecent'],
       filters: [{ name: 'Программы и ярлыки', extensions: ['exe', 'lnk', 'url', 'bat', 'cmd'] }, { name: 'Все файлы', extensions: ['*'] }],
     });
     if (res.canceled || !res.filePaths.length) return null;
     const file = res.filePaths[0];
-    const apps = store.get('apps') || [];
-    if (!apps.some((a) => a.path === file)) {
-      apps.push({ path: file, name: path.basename(file).replace(/\.(exe|lnk|url|bat|cmd)$/i, '') });
-      store.set('apps', apps);
-    }
-    return apps;
-  });
-  handle('apps:open', async (file) => {
-    const apps = store.get('apps') || [];
-    if (!apps.some((a) => a.path === file)) return false;
-    return (await shell.openPath(file)) === '';
-  });
-  handle('file:icon', async (file) => {
-    const img = await fileIcon(String(file));
-    return img && !img.isEmpty() ? img.toDataURL() : null;
+    appsAdd({ id: file, kind: 'file', path: file, name: path.basename(file).replace(/\.(exe|lnk|url|bat|cmd)$/i, '') });
+    return appsList();
   });
 
   // --- shelf
@@ -1014,7 +1111,23 @@ function registerIpc() {
       const info = describeFile(String(p));
       if (info && !shelf.some((s) => s.path === info.path)) shelf.push(info);
     }
-    store.set('shelf', shelf.slice(-40));
+    store.set('shelf', shelf.slice(-60));
+    return store.get('shelf');
+  });
+  handle('shelf:pick', async () => {
+    const res = await dialog.showOpenDialog({ title: 'Положить на полку', properties: ['openFile', 'multiSelections', 'dontAddToRecent'] });
+    if (res.canceled) return store.get('shelf');
+    const shelf = store.get('shelf') || [];
+    for (const p of res.filePaths) {
+      const info = describeFile(p);
+      if (info && !shelf.some((x) => x.path === info.path)) shelf.push(info);
+    }
+    store.set('shelf', shelf.slice(-60));
+    return store.get('shelf');
+  });
+  handle('shelf:removeMany', (files) => {
+    const gone = new Set(Array.isArray(files) ? files.map(String) : []);
+    store.set('shelf', (store.get('shelf') || []).filter((x) => !gone.has(x.path)));
     return store.get('shelf');
   });
   handle('shelf:remove', (file) => {
@@ -1191,7 +1304,10 @@ async function main() {
   const helperCmd = process.env.KAPLYA_HELPER_CMD ? JSON.parse(process.env.KAPLYA_HELPER_CMD) : null;
   const helperScript = path.join(SRC, 'helper', 'helper.ps1').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
   helper = new WinHelper({ script: helperScript, command: helperCmd });
-  system = new SystemWatch(helper, { ownPids: [process.pid] });
+  system = new SystemWatch(helper, {
+    ownPids: [process.pid],
+    findCover: (track) => (store.get('settings.coverSearch') === false ? null : netApi.cover(track)),
+  });
   clips = new ClipWatch(
     {
       io: clipio,
@@ -1209,6 +1325,14 @@ async function main() {
   const fetchFn = TEST && process.env.KAPLYA_TEST_FETCH ? require(process.env.KAPLYA_TEST_FETCH) : (url, init) => net.fetch(url, init);
   netApi = new NetApi(fetchFn, shared);
   wifi = new Wifi(helper, shared);
+  icons = new Icons({
+    app,
+    shell,
+    nativeImage,
+    fetch: fetchFn,
+    dir: path.join(app.getPath('userData'), 'icons'),
+    helper: (cmd, args) => helper.call(cmd, args, 8000),
+  });
   obs = new ObsControl({
     client: new ObsClient(),
     getConfig: obsConfig,
