@@ -157,6 +157,7 @@ class SystemWatch extends EventEmitter {
     this.busy.sys = true;
     try {
       const r = await this.helper.call('sys.poll', { ownPids: this.ownPids }, 15000);
+      this.emit('poll', r);
       if (r.volume && Date.now() > this.volumeHold && !sameJson(pickVolume(r.volume), this.volume)) {
         this.volume = pickVolume(r.volume);
         this.emit('volume', this.volume);

@@ -22,6 +22,8 @@ const state = {
   pausedAt: 0,
   hasMedia: process.env.MOCK_NO_MEDIA !== '1',
   second: false, // a browser tab playing too
+  active: null, // the program in front: { pid, exe, path, name, title }
+  idleMs: 0,
   volume: { available: true, level: 0.62, muted: false },
   dark: true,
   fullscreen: false,
@@ -99,7 +101,7 @@ function run(cmd, a) {
       if (typeof a.level === 'number') state.volume.level = Math.max(0, Math.min(1, a.level));
       if (typeof a.muted === 'boolean') state.volume.muted = a.muted;
       return state.volume;
-    case 'sys.poll': return { fullscreen: state.fullscreen, dark: state.dark, volume: state.volume };
+    case 'sys.poll': return { fullscreen: state.fullscreen, dark: state.dark, volume: state.volume, active: state.active, idleMs: state.idleMs };
     case 'theme.set': state.dark = Boolean(a.dark); return { dark: state.dark };
     case 'radio.get': return state.radios;
     case 'radio.set': state.radios[a.kind === 'bluetooth' ? 'bluetooth' : 'wifi'] = Boolean(a.on); return state.radios;

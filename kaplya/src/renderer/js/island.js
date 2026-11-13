@@ -15,11 +15,12 @@ import notes from './tabs/notes.js';
 import weather from './tabs/weather.js';
 import control from './tabs/control.js';
 import chat from './tabs/chat.js';
+import activity from './tabs/activity.js';
 
 const api = window.kaplya;
 const $ = (sel) => document.querySelector(sel);
 
-const TABS = [home, clipboardTab, shelf, text, notes, weather, control, chat];
+const TABS = [home, clipboardTab, shelf, text, notes, weather, control, activity, chat];
 const TOP = 6; // gap between the screen edge and the island, px
 
 const el = {

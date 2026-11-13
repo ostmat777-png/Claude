@@ -79,6 +79,9 @@ async function main() {
       assert.strictEqual(typeof r.fullscreen, 'boolean');
       assert.strictEqual(typeof r.dark, 'boolean');
       assert.strictEqual(typeof r.volume.available, 'boolean');
+      assert.strictEqual(typeof r.idleMs, 'number');
+      // whatever is in front of this test run: it has a name and an exe
+      if (r.active) assert.ok(r.active.name && r.active.exe && r.active.pid > 0, JSON.stringify(r.active));
       return r;
     });
     await check('volume.get', async () => {

@@ -24,6 +24,7 @@ const { Launcher } = require('./launcher.js');
 const { ObsClient, ObsControl } = require('./obs.js');
 const secret = require('./secret.js');
 const { Icons } = require('./icons.js');
+const { Activity } = require('./activity.js');
 
 const TEST = process.env.KAPLYA_TEST === '1';
 // Tests start from an empty profile every time; the first-start greeting would get
@@ -58,6 +59,7 @@ if (!TEST && !app.requestSingleInstanceLock()) {
 /** @type {Launcher} */ let launcher;
 /** @type {ObsControl} */ let obs;
 /** @type {Icons} */ let icons;
+/** @type {Activity} */ let activity;
 let shared = {};
 
 /** @type {BrowserWindow|null} */ let island = null;
@@ -1099,6 +1101,14 @@ function registerIpc() {
     return icons.forFile(item.path);
   });
   handle('file:thumb', (file) => icons.forShelf(String(file)));
+
+  // --- time spent in programs
+  handle('activity:report', (range) => activity.report(['today', 'yesterday', 'week'].includes(range) ? range : 'today'));
+  handle('activity:icon', (file) => (file && fs.existsSync(String(file)) ? icons.forFile(String(file)) : null));
+  handle('activity:clear', () => {
+    activity.clear();
+    return true;
+  });
   handle('file:icon', (file) => icons.forFile(String(file)));
   handle('apps:pick', async () => {
     const res = await dialog.showOpenDialog({
@@ -1356,6 +1366,11 @@ async function main() {
     dir: path.join(app.getPath('userData'), 'icons'),
     helper: (cmd, args) => helper.call(cmd, args, 8000),
   });
+  activity = new Activity({
+    file: path.join(app.getPath('userData'), 'activity.json'),
+    enabled: () => store.get('settings.activity') !== false,
+    ownExe: path.basename(process.execPath),
+  });
   obs = new ObsControl({
     client: new ObsClient(),
     getConfig: obsConfig,
@@ -1377,6 +1392,7 @@ async function main() {
     }
   });
   system.on('volume', (v) => broadcast('sys:volume', v));
+  system.on('poll', (r) => activity.sample(r));
   system.on('theme', (dark) => broadcast('sys:theme', dark));
   system.on('fullscreen', (full) => sendIsland('island:fullscreen', full && store.get('settings.hideOnFullscreen') !== false));
   obs.on('state', (s) => {
@@ -1450,6 +1466,7 @@ async function main() {
     clips.stop();
     helper.stop();
     obs.setEnabled(false);
+    activity.save();
   });
 
   if (TEST) {
@@ -1470,6 +1487,7 @@ async function main() {
       clips,
       clipio,
       obs,
+      activity,
       system,
       checkReminders,
     };

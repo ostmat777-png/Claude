@@ -291,6 +291,64 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  await scenario('activity: time in programs, by hour and by day', {}, async (k) => {
+    await k.open('activity');
+    assert.match(await text(k, '.act-list'), /Пока пусто/);
+    // programs come to the front one after another, as the helper reports them
+    const step = async (active, seconds, idleMs = 0) => {
+      await k.helper('mock.set', { active, idleMs });
+      await sleep(seconds * 1000);
+    };
+    const chrome = { pid: 10, exe: 'chrome.exe', path: '', name: 'Google Chrome', title: 'YouTube' };
+    const code = { pid: 11, exe: 'Code.exe', path: '', name: 'Visual Studio Code', title: 'main.js' };
+    await step(chrome, 6);
+    await step(code, 4);
+    await step(code, 4, 10 * 60000); // away from the computer: not counted
+    await step(null, 0.5);
+    const r = await k.page.evaluate(() => window.kaplya.invoke('activity:report', 'today'));
+    const secs = Object.fromEntries(r.apps.map((a) => [a.name, a.ms / 1000]));
+    assert.ok(secs['Google Chrome'] >= 3 && secs['Google Chrome'] <= 8, JSON.stringify(secs));
+    assert.ok(secs['Visual Studio Code'] >= 1.5 && secs['Visual Studio Code'] <= 6, 'idle time not counted: ' + JSON.stringify(secs));
+    // the tab shows them, longest first
+    await k.page.locator('.segment button', { hasText: 'Вчера' }).click();
+    await k.page.locator('.segment button', { hasText: 'Сегодня' }).click();
+    await until(async () => (await k.page.locator('.act-row').count()) === 2, 'two programs listed');
+    assert.match(await text(k, '.act-row >> nth=0'), /Google Chrome/);
+    assert.equal(await k.page.locator('.act-bars .act-col').count(), 24);
+    await k.page.locator('.segment button', { hasText: 'Неделя' }).click();
+    await until(async () => (await k.page.locator('.act-bars.week .act-col').count()) === 7, 'week chart');
+    await k.page.locator('.segment button', { hasText: 'Сегодня' }).click();
+    // a fuller day for the picture
+    await k.main(() => {
+      const a = globalThis.__kaplyaTest.activity;
+      const now = Date.now();
+      const day = new Date(now);
+      const progs = [['Google Chrome', 'chrome.exe', 2.4], ['Visual Studio Code', 'code.exe', 1.7], ['Telegram', 'telegram.exe', 0.6], ['Steam', 'steam.exe', 0.9], ['Яндекс Музыка', 'yandexmusic.exe', 0.4]];
+      for (const [name, exe, hours] of progs) {
+        let left = hours * 3600000;
+        for (let hr = 9; left > 0 && hr < day.getHours() + 1; hr++) {
+          const start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hr, 5).getTime();
+          const chunk = Math.min(left, 20 * 60000);
+          if (start + chunk > now) break;
+          a.add({ key: exe, name, path: '', exe }, start, start + chunk);
+          left -= chunk;
+        }
+      }
+    });
+    await k.page.locator('.segment button', { hasText: 'Вчера' }).click();
+    await k.page.locator('.segment button', { hasText: 'Сегодня' }).click();
+    await k.settle(500);
+    await k.shot('activity');
+    // the history can be wiped (two presses)
+    await k.page.click('#head-actions button[title="Стереть историю активности"]');
+    await k.page.click('#head-actions button[title^="Нажмите ещё раз"]');
+    await until(async () => /Пока пусто/.test(await text(k, '.act-list')), 'history wiped');
+    // switched off in the settings: nothing is counted
+    await k.main(() => globalThis.__kaplyaTest.store.set('settings.activity', false));
+    await step(chrome, 3);
+    assert.equal((await k.page.evaluate(() => window.kaplya.invoke('activity:report', 'today'))).total, 0);
+  });
+
   // ------------------------------------------------------------------ clipboard
   await scenario('clipboard: toast, history, copy again, pin, delete, search', {}, async (k) => {
     await sleep(700); // the first look at the clipboard is silent

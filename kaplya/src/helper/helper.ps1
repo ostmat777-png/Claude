@@ -226,6 +226,30 @@ namespace Kaplya {
       return (full ? "1|" : "0|") + cls + "|" + pid;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+
+    // Milliseconds since the mouse or keyboard was last touched.
+    public static long IdleMs() {
+      var info = new LASTINPUTINFO();
+      info.cbSize = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+      if (!GetLastInputInfo(ref info)) return 0;
+      return (long)(unchecked((uint)Environment.TickCount - info.dwTime));
+    }
+
+    // "pid|title" of the window in front.
+    public static string ForegroundApp() {
+      IntPtr h = GetForegroundWindow();
+      if (h == IntPtr.Zero) return "0|";
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      var sb = new StringBuilder(512);
+      GetWindowText(h, sb, sb.Capacity);
+      return pid + "|" + sb.ToString().Replace("|", " ");
+    }
+
     // Tells running programs that the light/dark setting has changed.
     public static void BroadcastThemeChange() {
       UIntPtr res;
@@ -455,11 +479,61 @@ function Get-Fullscreen($ownPids) {
     }
 }
 
+# Which program is in front: its name as people know it ("Google Chrome", not
+# "chrome"), where it lives (for its icon), and the window title. Read once per
+# process and remembered.
+$script:ProcCache = @{}
+
+function Get-ActiveApp {
+    try {
+        Initialize-Native
+        $parts = ([Kaplya.Win]::ForegroundApp()).Split('|', 2)
+        $procId = [int]$parts[0]
+        $title = ''
+        if ($parts.Count -gt 1) { $title = [string]$parts[1] }
+        if ($procId -le 0) { return $null }
+        $info = $script:ProcCache[$procId]
+        if ($null -eq $info) {
+            $p = Get-Process -Id $procId -ErrorAction Stop
+            $path = ''
+            $name = [string]$p.ProcessName
+            try {
+                $path = [string]$p.Path
+                $desc = [string]$p.MainModule.FileVersionInfo.FileDescription
+                if ($desc -and $desc.Trim().Length -gt 1) { $name = $desc.Trim() }
+            } catch {}
+            $info = @{ exe = ([string]$p.ProcessName + '.exe'); path = $path; name = $name }
+            if ($script:ProcCache.Count -gt 300) { $script:ProcCache.Clear() }
+            $script:ProcCache[$procId] = $info
+        }
+        $res = @{ pid = $procId; exe = $info.exe; path = $info.path; name = $info.name; title = $title }
+        # Store apps run inside a frame host: the window title is the app's name.
+        if ($info.exe -ieq 'ApplicationFrameHost.exe' -and $title) {
+            $res.name = $title
+            $res.exe = 'uwp:' + $title
+        }
+        return $res
+    } catch {
+        return $null
+    }
+}
+
+function Get-IdleMs {
+    try {
+        Initialize-Native
+        return [long][Kaplya.Win]::IdleMs()
+    } catch {
+        return 0
+    }
+}
+
 function Invoke-SysPoll($a) {
     return @{
         fullscreen = (Get-Fullscreen $a.ownPids)
         dark       = (Get-ThemeDark)
         volume     = (Get-VolumeState)
+        active     = (Get-ActiveApp)
+        idleMs     = (Get-IdleMs)
     }
 }
 

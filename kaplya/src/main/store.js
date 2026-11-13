@@ -22,6 +22,7 @@ const DEFAULTS = {
     trackToast: true,
     lyrics: true,
     coverSearch: true, // look for a cover on the internet when the player gives none
+    activity: true, // count how long each program is in front (the Активность tab)
     weather: { place: null, askedOnce: false, map: false, mapLayer: 'nowcast' },
     hotkeys: {
       palette: 'Alt+Space',
