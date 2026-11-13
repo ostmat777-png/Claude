@@ -52,8 +52,8 @@ export function forecastUrl(place) {
     latitude: String(place.lat),
     longitude: String(place.lon),
     current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m,dew_point_2m,uv_index',
-    hourly: 'temperature_2m,weather_code,precipitation_probability,is_day',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max',
+    hourly: 'temperature_2m,weather_code,precipitation_probability,is_day,apparent_temperature,relative_humidity_2m,dew_point_2m,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m,uv_index,precipitation',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant,daylight_duration',
     timezone: 'auto',
     forecast_days: '7',
     wind_speed_unit: 'ms',
@@ -88,6 +88,15 @@ export function normalizeForecast(raw, place, fetchedAt = Date.now()) {
       code: num(h.weather_code && h.weather_code[i]),
       isDay: num(h.is_day && h.is_day[i], 1) === 1,
       pop: num(h.precipitation_probability && h.precipitation_probability[i]),
+      feels: num(h.apparent_temperature && h.apparent_temperature[i]),
+      humidity: num(h.relative_humidity_2m && h.relative_humidity_2m[i]),
+      dew: num(h.dew_point_2m && h.dew_point_2m[i]),
+      pressure: Math.round(hpaToMmHg(num(h.surface_pressure && h.surface_pressure[i]))),
+      wind: num(h.wind_speed_10m && h.wind_speed_10m[i]),
+      windDir: num(h.wind_direction_10m && h.wind_direction_10m[i]),
+      gusts: num(h.wind_gusts_10m && h.wind_gusts_10m[i]),
+      uv: num(h.uv_index && h.uv_index[i]),
+      precip: num(h.precipitation && h.precipitation[i]),
     });
   }
 
@@ -104,6 +113,9 @@ export function normalizeForecast(raw, place, fetchedAt = Date.now()) {
       uvMax: num(d.uv_index_max && d.uv_index_max[i]),
       precip: num(d.precipitation_sum && d.precipitation_sum[i]),
       pop: num(d.precipitation_probability_max && d.precipitation_probability_max[i]),
+      windMax: num(d.wind_speed_10m_max && d.wind_speed_10m_max[i]),
+      windDir: num(d.wind_direction_10m_dominant && d.wind_direction_10m_dominant[i]),
+      daylight: num(d.daylight_duration && d.daylight_duration[i]),
     });
   }
 
@@ -139,6 +151,39 @@ export function sunProgress(localTime, sunrise, sunset) {
   const b = Date.parse(sunset + ':00Z');
   if (![t, a, b].every(Number.isFinite) || b <= a) return 0.5;
   return (t - a) / (b - a);
+}
+
+/** "растёт", "падает" or "не меняется": how the pressure goes over the next hours. */
+export function pressureTrend(hourly, hours = 6) {
+  if (!hourly || hourly.length < 2) return 'не меняется';
+  const a = hourly[0].pressure;
+  const b = hourly[Math.min(hours, hourly.length - 1)].pressure;
+  if (b - a >= 2) return 'растёт';
+  if (a - b >= 2) return 'падает';
+  return 'не меняется';
+}
+
+/** How the air feels at this humidity and dew point. */
+export function humidityWords(humidity, dew) {
+  if (dew >= 20) return 'душно';
+  if (dew >= 16) return 'влажно, ощущается тяжело';
+  if (humidity < 30) return 'сухой воздух';
+  if (humidity > 85) return 'очень влажно, возможен туман';
+  return 'комфортно';
+}
+
+/** "8 ч 34 мин" */
+export function hoursMinutes(seconds) {
+  const m = Math.round((Number(seconds) || 0) / 60);
+  return `${Math.floor(m / 60)} ч ${m % 60} мин`;
+}
+
+/** What to do about the sun at this UV index. */
+export function uvAdvice(uv) {
+  if (uv < 3) return 'Защита не нужна.';
+  if (uv < 6) return 'В полдень лучше в тени, нужен крем от солнца.';
+  if (uv < 8) return 'Крем, головной убор и очки; с 11 до 16 — в тени.';
+  return 'Избегайте солнца в середине дня, обязательно крем и одежда с рукавами.';
 }
 
 export const formatTemp = (t) => (Math.round(t) === 0 ? '0' : String(Math.round(t)).replace('-', '−')) + '°';

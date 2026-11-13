@@ -1224,7 +1224,8 @@ function hardenWebContents() {
             width: 520,
             height: 720,
             autoHideMenuBar: true,
-            webPreferences: { partition: CHAT_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false },
+            // sign-in windows share the page's cookies
+            webPreferences: { session: contents.session, sandbox: true, contextIsolation: true, nodeIntegration: false },
           },
         };
       });
@@ -1254,13 +1255,20 @@ function setupSessions() {
     }
   });
 
-  // Chat sites see an ordinary Chrome; some refuse to sign in to anything else.
-  const chat = session.fromPartition(CHAT_PARTITION);
+  // Web pages shown in the island (chats, the weather map, music services, YouTube)
+  // each live in their own storage, apart from the app's pages.
+  for (const name of WEB_PARTITIONS) setupWebSession(session.fromPartition(name), own);
+}
+
+const WEB_PARTITIONS = [CHAT_PARTITION, 'persist:web', 'persist:music'];
+const mediaAllowed = new Map(); // origin -> true | false, until the app is closed
+
+function setupWebSession(chat, own) {
+  // These sites see an ordinary Chrome; some refuse to sign in to anything else.
   chat.setUserAgent(own.getUserAgent().replace(/\s(Kaplya|kaplya|Electron)\/\S+/g, ''));
-  // Chat sites are ordinary web pages. They may copy to the clipboard and go full
-  // screen; the microphone and camera only after the person says yes, per site;
-  // nothing else (reading the clipboard, location, notifications).
-  const mediaAllowed = new Map(); // origin -> true | false, until the app is closed
+  // They are ordinary web pages. They may copy to the clipboard, go full screen and
+  // play sound; the microphone and camera only after the person says yes, per
+  // site; nothing else (reading the clipboard, location, notifications).
   const originOf = (url) => {
     try {
       return new URL(url).origin;
@@ -1271,6 +1279,8 @@ function setupSessions() {
   chat.setPermissionRequestHandler((wc, permission, callback, details) => {
     if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return callback(true);
     if (permission !== 'media') return callback(false);
+    // playing sound or video asks for nothing; only a microphone or camera does
+    if (details && Array.isArray(details.mediaTypes) && details.mediaTypes.length === 0) return callback(true);
     const origin = originOf((details && details.requestingUrl) || wc.getURL());
     if (!/^https:/.test(origin)) return callback(false);
     if (mediaAllowed.has(origin)) return callback(mediaAllowed.get(origin));

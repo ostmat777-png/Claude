@@ -1772,3 +1772,228 @@
 .chat-frame[hidden] {
   display: none;
 }
+
+/* ------------------------------------------------------------------ Погода: hints, details, map */
+
+/* a hint over a forecast cell, at once (the browser's own one waits a second) */
+.wcell {
+  position: relative;
+}
+
+.wcell[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 190px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--card-3);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
+  white-space: pre-line;
+  pointer-events: none;
+}
+
+.wstrip-wrap {
+  overflow: visible;
+}
+
+.wcell.day {
+  border-radius: 9px;
+  padding: 2px 0;
+  color: var(--text);
+  transition: background 0.12s;
+}
+
+.wcell.day:hover {
+  background: var(--card-2);
+}
+
+.wcell.day.on {
+  background: var(--card-3);
+}
+
+button.wtile {
+  text-align: left;
+  color: var(--text);
+  transition: background 0.12s, transform 0.12s var(--spring);
+}
+
+button.wtile:hover {
+  background: var(--card-2);
+}
+
+button.wtile:active {
+  transform: scale(0.98);
+}
+
+.wtile .label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wtile .label .icon {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+button.wtile:hover .label .icon {
+  opacity: 1;
+}
+
+.wdetail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 192px;
+  padding: 8px 12px 10px;
+  animation: rise 0.25s var(--spring);
+}
+
+.wdetail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -6px;
+  font-size: 14px;
+}
+
+.wfacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.wfact {
+  display: flex;
+  flex-direction: column;
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.wfact b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wchart {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.wchart .line {
+  fill: none;
+  stroke: var(--c);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.wchart .area {
+  fill: var(--c);
+  opacity: 0.13;
+}
+
+.wchart .bar {
+  fill: var(--c);
+  opacity: 0.75;
+}
+
+.wchart .dot {
+  fill: var(--c);
+}
+
+.wchart text {
+  fill: var(--muted);
+  font: 10px var(--font);
+  text-anchor: middle;
+}
+
+.wchart .val {
+  fill: var(--text);
+  font-weight: 600;
+}
+
+.wnote {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.wday {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wday-temp {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.wsun-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.wsun-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px;
+  border-radius: 8px;
+  background: var(--card-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wsun-day span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.wmap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wmap-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wmap-layers {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.wmap-layers .chip {
+  height: 26px;
+  gap: 5px;
+}
+
+.wmap-stage {
+  height: 400px;
+  overflow: hidden;
+  background: #1c2b3c;
+}
+
+.wmap-frame {
+  display: inline-flex;
+  width: 100%;
+  height: 100%;
+}

@@ -23,6 +23,15 @@ function forecast() {
     hourly: {
       time: hours,
       temperature_2m: temps,
+      apparent_temperature: temps.map((t) => t - 1),
+      relative_humidity_2m: hours.map((_, i) => 50 + Math.round(25 * Math.cos(((i % 24) - 4) / 24 * Math.PI * 2))),
+      dew_point_2m: hours.map(() => 8.6),
+      surface_pressure: hours.map((_, i) => 1012 - i * 0.3),
+      wind_speed_10m: hours.map((_, i) => 2 + (i % 7)),
+      wind_direction_10m: hours.map((_, i) => (200 + i * 5) % 360),
+      wind_gusts_10m: hours.map((_, i) => 5 + (i % 9)),
+      uv_index: hours.map((_, i) => Math.max(0, 4 * Math.sin(((i % 24) - 6) / 13 * Math.PI))),
+      precipitation: hours.map((_, i) => (Math.floor(i / 5) % 7 === 4 ? 0.6 : 0)),
       weather_code: hours.map((_, i) => codes[Math.floor(i / 5) % codes.length]),
       precipitation_probability: hours.map((_, i) => (Math.floor(i / 5) % codes.length === 4 ? 60 : 5)),
       is_day: hours.map((_, i) => (i % 24 >= 7 && i % 24 < 19 ? 1 : 0)),
@@ -37,6 +46,9 @@ function forecast() {
       uv_index_max: [4.1, 4.5, 3.9, 2.2, 1.8, 3.0, 3.6],
       precipitation_sum: [0, 0, 0.2, 1.4, 6.3, 0.1, 0],
       precipitation_probability_max: [5, 5, 15, 40, 80, 20, 5],
+      wind_speed_10m_max: [6, 8, 5, 9, 12, 7, 4],
+      wind_direction_10m_dominant: [225, 240, 180, 270, 300, 200, 190],
+      daylight_duration: [45240, 45000, 44760, 44520, 44280, 44040, 43800],
     },
   };
 }

@@ -22,7 +22,7 @@ const DEFAULTS = {
     trackToast: true,
     lyrics: true,
     coverSearch: true, // look for a cover on the internet when the player gives none
-    weather: { place: null, askedOnce: false },
+    weather: { place: null, askedOnce: false, map: false, mapLayer: 'nowcast' },
     hotkeys: {
       palette: 'Alt+Space',
       region: 'Ctrl+Alt+S',

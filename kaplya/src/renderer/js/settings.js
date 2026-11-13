@@ -160,7 +160,7 @@ function weather() {
   const results = h('div', { class: 'places' });
   const status = h('div', { class: 'row-hint' });
   const choose = (p) => {
-    save('settings.weather', { place: p, askedOnce: true });
+    save('settings.weather', { ...getPath('settings.weather'), place: p, askedOnce: true });
     render();
   };
   input.addEventListener('input', debounce(async () => {
@@ -173,13 +173,14 @@ function weather() {
   }, 300));
 
   return [
+    group(toggleRow('settings.weather.map', 'Карта погоды', 'Кнопка с картой на вкладке «Погода»: осадки, температура, ветер, давление и снег с Яндекс Погоды. Карта открывается внутри острова')),
     group(row('Сейчас показывается', place ? `${place.lat.toFixed(2)}, ${place.lon.toFixed(2)}` : 'Город не выбран, погода выключена',
       h('b', { text: place ? place.name : '—' }),
       place ? h('button', {
         class: 'btn small',
         text: 'Убрать',
         onclick: () => {
-          save('settings.weather', { place: null, askedOnce: true });
+          save('settings.weather', { ...getPath('settings.weather'), place: null, askedOnce: true });
           render();
         },
       }) : null)),

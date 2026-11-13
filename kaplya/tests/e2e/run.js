@@ -494,9 +494,49 @@ async function main() {
     assert.match(await text(k, '.wtiles'), /759/);
     await k.settle();
     await k.shot('weather');
+    // a hint over an hour: what the weather will be
+    assert.match(await k.page.getAttribute('.wcell >> nth=6', 'data-tip'), /^(Ясно|Преимущественно ясно|Переменная облачность|Пасмурно|Небольшой дождь)/);
+    // a tile opens into details with a chart of the coming hours
+    await k.page.click('.wtile[data-tile="humidity"]');
+    await k.page.waitForSelector('.wdetail');
+    assert.equal(await text(k, '.wdetail-head b'), 'Влажность');
+    assert.match(await text(k, '.wfacts'), /Точка росы.*Ощущение/s);
+    assert.ok((await k.page.locator('.wdetail svg.wchart text.hour').count()) >= 7, 'hour labels on the chart');
+    await k.settle(300);
+    await k.shot('weather-humidity');
+    await k.page.click('.wdetail-head button[title="Назад"]');
+    await k.page.waitForSelector('.wtiles');
+    for (const t of ['wind', 'pressure', 'sun', 'precip', 'uv']) {
+      await k.page.click(`.wtile[data-tile="${t}"]`);
+      await k.page.waitForSelector('.wdetail');
+      await k.page.click('.wdetail-head button[title="Назад"]');
+      await k.page.waitForSelector('.wtiles');
+    }
     await k.page.locator('.wstrip-wrap .segment button', { hasText: 'Неделя' }).click();
     assert.equal(await k.page.locator('.wcell').count(), 7);
     assert.equal(await text(k, '.wcell >> nth=0 >> span >> nth=0'), 'Сегодня');
+    // a day opens: its numbers and its temperature through the day
+    await k.page.click('.wcell.day >> nth=1');
+    await k.page.waitForSelector('.wdetail .wday');
+    assert.equal(await text(k, '.wdetail-head b'), 'Завтра');
+    assert.match(await text(k, '.wfacts'), /Световой день.*12 ч 30 мин/s);
+    await k.settle(300);
+    await k.shot('weather-day');
+    await k.page.click('.wcell.day >> nth=1');
+    await k.page.waitForSelector('.wtiles');
+
+    // the map is an addition: no button until it is switched on
+    assert.equal(await k.page.locator('#head-actions button[data-act="map"]:not([hidden])').count(), 0);
+    await k.main(() => globalThis.__kaplyaTest.store.set('settings.weather.map', true));
+    await until(async () => (await k.page.locator('#head-actions button[data-act="map"]:not([hidden])').count()) === 1, 'map button');
+    await k.page.click('#head-actions button[data-act="map"]');
+    await k.page.waitForSelector('.wmap webview');
+    assert.equal(await k.page.locator('.wmap-layers .chip').count(), 5);
+    await k.page.locator('.wmap-layers .chip', { hasText: 'Снег' }).click();
+    assert.equal(await k.main(() => globalThis.__kaplyaTest.store.get('settings.weather.mapLayer')), 'snow');
+    assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('settings.weather.place'))).name, 'Казань', 'the city is kept');
+    await k.page.click('#head-actions button[data-act="map"]');
+    await k.page.waitForSelector('.wtiles');
     assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('settings.weather.place'))).name, 'Казань');
     await k.page.keyboard.press('Escape');
     await k.leave();
