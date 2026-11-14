@@ -26,6 +26,7 @@ export default {
     let range = 'today';
     let timer = 0;
     let showAll = false;
+    let opened = null; // the program whose details are open
     const icons = new Map();
 
     const seg = segment(RANGES, range, (v) => {
@@ -74,7 +75,18 @@ export default {
       for (const a of shown) {
         const pct = r.total ? Math.round((a.ms / r.total) * 100) : 0;
         const letter = h('span', { class: 'act-letter', style: { background: colorFor(a.name) }, text: (a.name || '?').charAt(0).toUpperCase() });
-        const row = h('div', { class: 'act-row' + (r.now && r.now.key === a.key && range === 'today' ? ' live' : ''), title: a.path || a.exe },
+        const row = h('div', {
+          class: 'act-row' + (r.now && r.now.key === a.key && range === 'today' ? ' live' : '') + (opened === a.key ? ' open' : ''),
+          title: (a.path || a.exe) + '\nНажмите, чтобы увидеть по дням',
+          role: 'button',
+          tabIndex: 0,
+          data: { key: a.key },
+          onclick: () => {
+            opened = opened === a.key ? null : a.key;
+            paintList(r);
+            app.relayout();
+          },
+        },
           letter,
           h('div', { class: 'act-body' },
             h('div', { class: 'act-line' }, h('span', { class: 'ellipsis', text: a.name }), h('span', { class: 'grow' }),
@@ -84,6 +96,7 @@ export default {
           if (url && letter.isConnected) letter.replaceWith(h('img', { class: 'act-icon', src: url, alt: '' }));
         });
         list.append(row);
+        if (opened === a.key) list.append(details(a, r));
       }
       if (r.apps.length > 7) {
         list.append(h('button', {
@@ -96,6 +109,24 @@ export default {
           },
         }));
       }
+    }
+
+    /** One program over the last seven days. */
+    function details(a, r) {
+      const week = a.week || [];
+      const max = Math.max(1, ...week);
+      const used = week.filter((v) => v > 0);
+      const avg = used.length ? used.reduce((n, v) => n + v, 0) / used.length : 0;
+      const best = week.indexOf(Math.max(...week));
+      const day = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('ru-RU', { weekday: 'short' });
+      return h('div', { class: 'act-details' },
+        h('div', { class: 'act-week' }, week.map((v, i) => h('div', { class: 'act-col', title: `${day(r.week[i])} · ${spent(v)}` },
+          h('div', { class: 'act-bar-wrap' }, h('div', { class: 'act-bar', style: { height: Math.max(v ? 4 : 0, Math.round((v / max) * 100)) + '%', background: colorFor(a.name) } })),
+          h('span', { class: 'act-label', text: day(r.week[i]) })))),
+        h('div', { class: 'act-facts' },
+          h('div', {}, h('span', { class: 'faint', text: 'За неделю' }), h('b', { text: spent(week.reduce((n, v) => n + v, 0)) })),
+          h('div', {}, h('span', { class: 'faint', text: 'В среднем' }), h('b', { text: used.length ? spent(avg) + ' в день' : '—' })),
+          h('div', {}, h('span', { class: 'faint', text: 'Больше всего' }), h('b', { text: week[best] ? day(r.week[best]) + ', ' + spent(week[best]) : '—' }))));
     }
 
     async function load() {

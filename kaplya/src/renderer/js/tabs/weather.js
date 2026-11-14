@@ -295,6 +295,16 @@ export default {
             ['Восход', hm(d.sunrise)], ['Закат', hm(d.sunset)], ['Световой день', hoursMinutes(d.daylight)], ['УФ-индекс', `до ${Math.round(d.uvMax)}, ${uvLevel(d.uvMax)}`]),
           dayHours.length >= 6 ? chart(dayHours, (x) => x.temp, { unit: 'Температура по часам', label: (v) => formatTemp(v), color: '#ffb84a' }) : null,
         ];
+      } else if (detail === 'temp') {
+        title = 'Температура';
+        const next = hr.slice(0, 24);
+        const warm = next.reduce((a, b) => (b.temp > a.temp ? b : a), next[0] || { temp: 0, hour: '' });
+        const cold = next.reduce((a, b) => (b.temp < a.temp ? b : a), next[0] || { temp: 0, hour: '' });
+        body = [
+          factRow(['Сейчас', `${formatTemp(c.temp)}, ощущается ${formatTemp(c.feels)}`], ['Теплее всего', `${formatTemp(warm.temp)} в ${warm.hour}`], ['Холоднее всего', `${formatTemp(cold.temp)} в ${cold.hour}`]),
+          chart(hr, (x) => x.temp, { unit: 'Температура по часам', label: (v) => formatTemp(v), color: '#ffb84a' }),
+          h('div', { class: 'wnote faint', text: 'Ощущаемая температура учитывает ветер и влажность: в ветер холоднее, в духоту жарче.' }),
+        ];
       } else if (detail === 'wind') {
         title = 'Ветер';
         body = [
@@ -417,7 +427,15 @@ export default {
       const mins = Math.round((Date.now() - w.fetchedAt) / 60000);
       app.setHeadNote(w.stale ? 'нет связи, данные старые' : mins < 2 ? 'обновлено только что' : `обновлено ${mins} мин назад`);
 
-      const now = h('div', { class: 'wnow card' + (c.isDay ? ' day' : ' night') },
+      const now = h('button', {
+        class: 'wnow card' + (c.isDay ? ' day' : ' night') + (detail === 'temp' ? ' on' : ''),
+        title: 'Температура по часам',
+        data: { tile: 'temp' },
+        onclick: () => {
+          detail = detail === 'temp' ? null : 'temp';
+          paint();
+        },
+      },
         h('div', { class: 'wnow-place' }, icon('map-pin', 13), h('span', { class: 'ellipsis', text: w.place.name })),
         weatherIcon(c.code, c.isDay, 44),
         h('div', { class: 'wnow-temp', text: formatTemp(c.temp) }),

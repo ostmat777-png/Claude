@@ -15,6 +15,7 @@ export default {
     const { api } = app;
     let visible = false;
     let query = '';
+    const opened = new Set(); // entries shown in full
 
     const search = h('input', { class: 'field', type: 'text', placeholder: 'Поиск по истории', spellcheck: false });
     const list = h('div', { class: 'clip-list' });
@@ -40,9 +41,12 @@ export default {
         return;
       }
       for (const item of items) {
+        const full = opened.has(item.id);
         const body = item.kind === 'image'
-          ? h('img', { class: 'clip-image', src: item.thumb, alt: '' })
-          : h('div', { class: 'clip-text', text: item.text.length > 400 ? item.text.slice(0, 400) + '…' : item.text });
+          ? h('img', { class: 'clip-image' + (full ? ' big' : ''), src: item.thumb, alt: '' })
+          : h('div', { class: 'clip-text' + (full ? ' full' : ''), text: full ? item.text : item.text.length > 400 ? item.text.slice(0, 400) + '…' : item.text });
+        // long text and pictures can be opened in place, without copying them
+        const long = item.kind === 'image' || item.text.length > 90 || item.text.split('\n').length > 2;
         const swatch = item.kind === 'color' ? h('span', { class: 'clip-swatch', style: { background: item.text.trim().startsWith('#') || /^(rgb|hsl)/i.test(item.text.trim()) ? item.text.trim() : '#' + item.text.trim() } }) : null;
         const meta = [KINDS[item.kind] || 'Текст', item.kind === 'image' ? `${item.width}×${item.height}` : `${item.size} зн.`, timeAgo(item.time)].join(' · ');
         const row = h('div', {
@@ -61,6 +65,17 @@ export default {
         h('span', { class: 'clip-icon' }, swatch || icon(ICONS[item.kind] || 'type', 15)),
         h('div', { class: 'clip-body' }, body, h('div', { class: 'clip-meta faint', text: meta })),
         h('div', { class: 'clip-actions' },
+          long ? h('button', {
+            class: 'ghost',
+            title: full ? 'Свернуть' : item.kind === 'image' ? 'Показать крупнее' : 'Показать целиком',
+            data: { act: 'expand' },
+            onclick: (e) => {
+              e.stopPropagation();
+              if (full) opened.delete(item.id);
+              else opened.add(item.id);
+              paint();
+            },
+          }, icon(full ? 'chevron-up' : 'chevron-down', 14)) : null,
           item.kind === 'link' ? h('button', {
             class: 'ghost',
             title: 'Открыть ссылку',

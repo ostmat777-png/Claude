@@ -135,12 +135,15 @@ class Activity {
     const apps = new Map();
     const hours = new Array(24).fill(0);
     const perDay = [];
+    // each program's time on each day of the last week, for its details
+    const week = [];
+    for (let i = 6; i >= 0; i--) week.push(dayKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i)));
     for (const key of days) {
       const day = this.days[key];
       let total = 0;
       if (day) {
         for (const [k, rec] of Object.entries(day.apps)) {
-          const a = apps.get(k) || { key: k, name: rec.name, path: rec.path, exe: rec.exe, ms: 0 };
+          const a = apps.get(k) || { key: k, name: rec.name, path: rec.path, exe: rec.exe, ms: 0, week: week.map((d) => (this.days[d] && this.days[d].apps[k] ? this.days[d].apps[k].ms : 0)) };
           a.ms += rec.ms;
           a.name = rec.name || a.name;
           apps.set(k, a);
@@ -156,6 +159,7 @@ class Activity {
     return {
       range,
       days,
+      week,
       total: list.reduce((n, a) => n + a.ms, 0),
       apps: list,
       hours,

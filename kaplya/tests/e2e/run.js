@@ -354,6 +354,13 @@ async function main() {
     await k.page.locator('.segment button', { hasText: 'Сегодня' }).click();
     await k.settle(500);
     await k.shot('activity');
+    // a program opens into its week
+    await k.page.click('.act-row >> nth=0');
+    await k.page.waitForSelector('.act-details .act-week .act-col');
+    assert.equal(await k.page.locator('.act-details .act-col').count(), 7);
+    assert.match(await text(k, '.act-facts'), /За неделю.*В среднем.*Больше всего/s);
+    await k.page.click('.act-row >> nth=0');
+    await k.page.waitForSelector('.act-details', { state: 'detached' });
     // the history can be wiped (two presses)
     await k.page.click('#head-actions button[title="Стереть историю активности"]');
     await k.page.click('#head-actions button[title^="Нажмите ещё раз"]');
@@ -466,6 +473,22 @@ async function main() {
     await until(async () => (await clipText(k)) === 'Созвон перенесли на 15:00', 'old entry back on the clipboard');
     await until(async () => (await k.main(() => globalThis.__kaplyaTest.clips.list()[0].text)) === 'Созвон перенесли на 15:00', 'entry to move up');
     assert.equal(await k.main(() => globalThis.__kaplyaTest.clips.list().length), 3);
+
+    // a long entry opens in full, in place, without being copied
+    const long = 'Длинная строка. '.repeat(40).trim();
+    await setClip(k, long);
+    await until(async () => (await k.page.locator('.clip').count()) === 4, 'long entry listed');
+    const before = await clipText(k);
+    await k.page.locator('.clip >> nth=0').hover();
+    await k.page.click('.clip >> nth=0 >> button[data-act="expand"]');
+    await k.page.waitForSelector('.clip-text.full');
+    assert.equal(await text(k, '.clip-text.full'), long);
+    assert.equal(await clipText(k), before, 'opening does not copy');
+    await k.page.click('.clip >> nth=0 >> button[data-act="expand"]');
+    await k.page.waitForSelector('.clip-text.full', { state: 'detached' });
+    await k.page.locator('.clip >> nth=0').hover();
+    await k.page.locator('.clip >> nth=0').locator('button[title="Удалить"]').click();
+    await until(async () => (await k.page.locator('.clip').count()) === 3, 'long entry removed');
 
     // search
     await k.page.fill('.clip-search input', 'example');
@@ -643,6 +666,13 @@ async function main() {
     assert.match(await text(k, '.wtiles'), /759/);
     await k.settle();
     await k.shot('weather');
+    // the "now" card opens into the temperature through the day
+    await k.page.click('.wnow');
+    await k.page.waitForSelector('.wdetail');
+    assert.equal(await text(k, '.wdetail-head b'), 'Температура');
+    assert.match(await text(k, '.wfacts'), /Теплее всего.*Холоднее всего/s);
+    await k.page.click('.wnow');
+    await k.page.waitForSelector('.wtiles');
     // a hint over an hour: what the weather will be
     assert.match(await k.page.getAttribute('.wcell >> nth=6', 'data-tip'), /^(Ясно|Преимущественно ясно|Переменная облачность|Пасмурно|Небольшой дождь)/);
     // a tile opens into details with a chart of the coming hours
