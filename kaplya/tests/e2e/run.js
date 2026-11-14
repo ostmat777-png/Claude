@@ -711,8 +711,10 @@ async function main() {
     await k.page.click('#head-actions button[data-act="map"]');
     await k.page.waitForSelector('.wmap webview');
     assert.equal(await k.page.locator('.wmap-layers .chip').count(), 5);
-    await k.page.locator('.wmap-layers .chip', { hasText: 'Снег' }).click();
+    // layers chosen quickly, one after another, while the map is still loading
+    for (const name of ['Температура', 'Ветер', 'Снег']) await k.page.locator('.wmap-layers .chip', { hasText: name }).click();
     assert.equal(await k.main(() => globalThis.__kaplyaTest.store.get('settings.weather.mapLayer')), 'snow');
+    await until(async () => (await k.page.evaluate(() => document.querySelector('.wmap webview').getTitle())) === 'snow', 'the last chosen layer shown');
     assert.equal((await k.main(() => globalThis.__kaplyaTest.store.get('settings.weather.place'))).name, 'Казань', 'the city is kept');
     await k.page.click('#head-actions button[data-act="map"]');
     await k.page.waitForSelector('.wtiles');

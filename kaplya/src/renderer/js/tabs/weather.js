@@ -365,6 +365,22 @@ export default {
 
     // ---------------------------------------------------------------- the map (Yandex Weather), when switched on
     let mapView = null;
+    let mapReady = false;
+    // Change the page of the map. Once it has loaded, go through loadURL: a layer
+    // chosen while the last one is still loading then simply replaces it, instead
+    // of being reported as a failed load.
+    function navigateMap(url) {
+      if (!mapView) return;
+      if (mapReady) {
+        try {
+          mapView.loadURL(url).catch(() => {});
+          return;
+        } catch {
+          // not attached yet: fall through
+        }
+      }
+      mapView.setAttribute('src', url);
+    }
     function mapUrl(layer) {
       const p = app.settings.weather.place;
       if (app.test) return 'data:text/html,<title>' + layer + '</title>'; // no internet in tests
@@ -380,14 +396,19 @@ export default {
           // only the page changes; the rest stays as it is
           app.set('settings.weather.mapLayer', id);
           for (const c of chips.children) c.classList.toggle('on', c.dataset.layer === id);
-          if (mapView) mapView.setAttribute('src', mapUrl(id));
+          navigateMap(mapUrl(id));
         },
       }, icon(ic, 12), name)));
       if (!mapView) {
         mapView = document.createElement('webview');
         mapView.setAttribute('partition', 'persist:web');
         mapView.className = 'wmap-frame';
+        mapView.addEventListener('dom-ready', () => {
+          mapReady = true;
+        });
       }
+      // put back into the page, it loads again: wait for it before loadURL
+      mapReady = false;
       const want = mapUrl(layer);
       if (mapView.getAttribute('src') !== want) mapView.setAttribute('src', want);
       root.append(h('div', { class: 'wmap' },
