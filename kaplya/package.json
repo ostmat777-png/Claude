@@ -1,7 +1,7 @@
 {
   "name": "kaplya",
   "productName": "Kaplya",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Капля: динамический островок для Windows",
   "private": true,
   "main": "src/main/main.js",

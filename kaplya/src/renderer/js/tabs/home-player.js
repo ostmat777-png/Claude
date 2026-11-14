@@ -543,9 +543,9 @@ export function createPlayer(app, hooks) {
             class: 'lline',
             data: { i: String(i) },
             text: line.text || '♪',
-            title: m && m.canSeek ? 'Перейти к этой строке' : '',
+            title: m && m.canSeek ? 'Перейти к этой строке' : m && m.estimated ? 'Сейчас поют эту строку: подстроить текст' : '',
             onclick: () => {
-              if (m && m.canSeek) api.invoke('media:cmd', 'seek', line.t);
+              if (m && (m.canSeek || m.estimated)) api.invoke('media:cmd', 'seek', line.t);
             },
           }));
         });
@@ -630,7 +630,7 @@ export function createPlayer(app, hooks) {
     if (stage === 'lyrics') stage = 'none';
     paintStage();
     if (app.settings.lyrics === false) return;
-    const res = await api.invoke('lyrics:get', { title: m.title, artist: m.artist, album: m.album, duration: m.duration });
+    const res = await api.invoke('lyrics:get', { key: m.key, title: m.title, artist: m.artist, album: m.album, duration: m.estimated ? 0 : m.duration });
     if (!app.sys.media || app.sys.media.key !== m.key) return; // the track changed while we waited
     if (res && ((res.synced && res.synced.length) || res.plain)) {
       lyrics = { key: m.key, lines: res.synced || [], plain: res.plain || '' };
@@ -698,7 +698,10 @@ export function createPlayer(app, hooks) {
     }
     btnPrev.disabled = !m.canPrev;
     btnNext.disabled = !m.canNext;
-    bar.disabled = !m.canSeek || !m.duration;
+    bar.disabled = !m.duration || (!m.canSeek && !m.estimated);
+    bar.title = m.estimated
+      ? (m.duration ? 'Плеер не сообщает время, остров считает его сам. Если расходится — подвиньте ползунок туда, где сейчас песня' : 'Плеер не сообщает время и длину трека')
+      : '';
     timeAll.textContent = m.duration ? formatTime(m.duration) : '';
     paintLike();
     paintSources();

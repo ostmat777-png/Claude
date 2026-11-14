@@ -69,6 +69,10 @@ function media(have, appId) {
     updated: now, now, key, canPrev: true, canNext: true, canSeek: true,
   };
   if (have !== key) res.thumb = t.thumb;
+  if (state.noTime) {
+    // like many real players: the track, but no time and no length
+    Object.assign(res, { position: 0, duration: 0, updated: -11644473600000, canSeek: false });
+  }
   return res;
 }
 

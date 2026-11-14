@@ -64,6 +64,12 @@ function chunks(text, max) {
 }
 
 /** Videos on a YouTube search page: { id, title, channel }. Both the old and the new page layout. */
+/** "1:02:03" -> 3723 */
+function clockSeconds(s) {
+  if (!/^\d{1,2}(:\d\d){1,2}$/.test(String(s || '').trim())) return 0;
+  return String(s).trim().split(':').reduce((a, x) => a * 60 + Number(x), 0);
+}
+
 function youtubeResults(html) {
   const m = /var ytInitialData = (\{.*?\});<\/script>/s.exec(String(html));
   if (!m) return [];
@@ -83,7 +89,7 @@ function youtubeResults(html) {
     }
     if (o.videoRenderer && o.videoRenderer.videoId) {
       const v = o.videoRenderer;
-      out.push({ id: v.videoId, title: text(v.title), channel: text(v.ownerText) });
+      out.push({ id: v.videoId, title: text(v.title), channel: text(v.ownerText), length: clockSeconds(text(v.lengthText)) });
     } else if (o.lockupViewModel && o.lockupViewModel.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
       const v = o.lockupViewModel;
       const md = v.metadata && v.metadata.lockupMetadataViewModel;
@@ -93,7 +99,9 @@ function youtubeResults(html) {
         channel = text(part.text) || (part.avatarStack && text(part.avatarStack.avatarStackViewModel && part.avatarStack.avatarStackViewModel.text)) || '';
         if (channel) break;
       }
-      out.push({ id: v.contentId, title: text(md && md.title), channel });
+      // the length is the "12:34" badge on the thumbnail
+      const badge = /"text":"(\d{1,2}(?::\d\d){1,2})"/.exec(JSON.stringify(v.contentImage || {}));
+      out.push({ id: v.contentId, title: text(md && md.title), channel, length: badge ? clockSeconds(badge[1]) : 0 });
     }
     for (const k of Object.keys(o)) walk(o[k]);
   };
@@ -110,6 +118,7 @@ class NetApi {
     this.lyricsCache = new Map();
     this.coverCache = new Map();
     this.ytCache = new Map();
+    this.ytLengths = new Map();
   }
 
   /**
@@ -223,6 +232,12 @@ class NetApi {
    * Windows reports for it. Only an exact enough match counts.
    * @returns {Promise<string[]>} ids of matching videos, best first (some may not allow being shown elsewhere)
    */
+  /** The length of a YouTube video known by its title, in seconds (0 = not found). */
+  async youtubeLength(title, channel) {
+    await this.youtubeFind(title, channel);
+    return this.ytLengths.get((channel + '|' + String(title || '').trim()).toLowerCase()) || 0;
+  }
+
   async youtubeFind(title, channel) {
     const t = String(title || '').trim();
     if (!t) return [];
@@ -258,6 +273,9 @@ class NetApi {
         ...list.filter(close),
       ];
       ids = [...new Set(ranked.map((v) => v.id))].slice(0, 4);
+      // how long the video is: only when the title is exactly this one
+      const exact = list.find(same);
+      if (exact && exact.length) this.ytLengths.set(key, exact.length);
     } catch {
       return []; // offline: try again next time
     }
@@ -354,7 +372,7 @@ class NetApi {
       return null; // offline: try again next time, do not cache
     }
     const result = hit && (hit.syncedLyrics || hit.plainLyrics)
-      ? { synced: hit.syncedLyrics ? this.shared.lrc.parseLrc(hit.syncedLyrics) : [], plain: hit.plainLyrics || '' }
+      ? { synced: hit.syncedLyrics ? this.shared.lrc.parseLrc(hit.syncedLyrics) : [], plain: hit.plainLyrics || '', duration: Number(hit.duration) || 0 }
       : null;
     this.lyricsCache.set(key, result);
     if (this.lyricsCache.size > 60) this.lyricsCache.delete(this.lyricsCache.keys().next().value);

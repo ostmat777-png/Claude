@@ -888,7 +888,13 @@ function registerIpc() {
     return r;
   });
   handle('volume:set', (change) => system.setVolume(change || {}).catch(() => system.volume));
-  handle('lyrics:get', (track) => (store.get('settings.lyrics') === false ? null : netApi.lyrics(track || {})));
+  handle('lyrics:get', async (track) => {
+    if (store.get('settings.lyrics') === false) return null;
+    const r = await netApi.lyrics(track || {});
+    // the words come with the length of the song: for players that give no length
+    if (r && r.duration && track && track.key) system.setDuration(String(track.key), r.duration);
+    return r;
+  });
   handle('media:sessions', async () => {
     const r = await helper.tryCall('media.sessions', {}, { sessions: [] }, 8000);
     return { sessions: system.sessions((r && r.sessions) || []), youtubeWindows: (r && r.youtubeWindows) || [] };
@@ -1441,8 +1447,15 @@ async function main() {
   setupSessions();
   registerIpc();
 
+  const lengthAsked = new Set();
   system.on('media', (media, info) => {
     sendIsland('sys:media', media);
+    // A video in a browser that gives no length: YouTube's search knows it.
+    if (media && !media.duration && !lengthAsked.has(media.key) && (media.fromTitle || /chrome|msedge|firefox|opera|yandex|browser|brave|vivaldi/i.test(media.app))) {
+      lengthAsked.add(media.key);
+      if (lengthAsked.size > 200) lengthAsked.clear();
+      netApi.youtubeLength(media.title, media.fromTitle ? '' : media.artist).then((sec) => system.setDuration(media.key, sec)).catch(() => {});
+    }
     if (media && info && info.trackChanged && media.playing && store.get('settings.trackToast') !== false) {
       toast({ type: 'track', title: media.title, text: media.artist, image: media.cover || null, quiet: true });
     }

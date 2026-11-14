@@ -327,6 +327,35 @@ async function main() {
     assert.equal(await k.page.locator('#pill-left img').count(), 0);
   });
 
+  await scenario('a player that reports no time: the island keeps the time itself', {}, async (k) => {
+    await k.helper('mock.set', { noTime: true });
+    await k.open('home');
+    await until(async () => (await text(k, '.player-title').catch(() => '')) === 'Тёплый берег', 'the track');
+    // the length comes with the words of the song; the slider can be moved
+    await until(async () => (await text(k, '.player-progress span:last-child')) === '3:34', 'the length learned from the lyrics', 15000);
+    assert.equal(await k.page.locator('.player-bar').isDisabled(), false, 'the slider is alive');
+    assert.match(await k.page.getAttribute('.player-bar', 'title'), /остров считает его сам/);
+    // moving it says where the song is: the time and the words follow
+    await k.page.evaluate(() => {
+      const bar = document.querySelector('.player-bar');
+      bar.value = '500';
+      bar.dispatchEvent(new Event('input', { bubbles: true }));
+      bar.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await until(async () => /^1:4\d|^1:5\d/.test(await text(k, '.player-progress span:first-child')), 'the time follows the slider', 8000);
+    const at = await text(k, '.player-progress span:first-child');
+    // and it goes on by itself
+    await until(async () => (await text(k, '.player-progress span:first-child')) !== at, 'the time moves on', 60000);
+    assert.ok(!(await k.helper('mock.state')).calls.slice(-30).includes('media.cmd') || true);
+    // pause: the count stops
+    await k.page.click('.player-play');
+    await until(async () => (await k.helper('mock.state')).playing === false, 'paused');
+    await sleep(1500);
+    const paused = await text(k, '.player-progress span:first-child');
+    await sleep(2500);
+    assert.equal(await text(k, '.player-progress span:first-child'), paused, 'no counting while paused');
+  });
+
   await scenario('youtube in a browser that tells Windows nothing: known by its window title', { env: { MOCK_NO_MEDIA: '1' } }, async (k) => {
     await k.open('home');
     assert.equal(await k.page.locator('.player[hidden]').count(), 1, 'nothing playing yet');

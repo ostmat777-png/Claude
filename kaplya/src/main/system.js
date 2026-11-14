@@ -28,6 +28,42 @@ class SystemWatch extends EventEmitter {
     this.web = null; // what the music service inside the island is playing: { state, at, cover }
     this.isOwnApp = opts.isOwnApp || (() => false); // our own entry in Windows' list of players
     this.page = null; // what the player's own window says: { key, position, duration, at, playing }
+    // Many players tell Windows the track but not the time (or tell it once and
+    // never again). Then the island keeps the time itself.
+    this.clock = null; // { key, base, at, playing, lastRaw }
+    this.durations = new Map(); // track key -> length in seconds, learned elsewhere (lyrics)
+    this.titlePlaying = true; // a browser known by its window title: assumed to play until paused from here
+  }
+
+  /** The length of a track the player gave no length for. */
+  setDuration(key, seconds) {
+    if (!key || !(seconds > 0)) return;
+    this.durations.set(key, seconds);
+    if (this.durations.size > 50) this.durations.delete(this.durations.keys().next().value);
+    if (this.media && this.media.key === key && !this.media.duration) this.pollMedia();
+  }
+
+  /** The island's own count of the time, for a player that does not report it. */
+  ownClock(raw, playing, now) {
+    let c = this.clock;
+    const rawPos = Number(raw.position) || 0;
+    if (!c || c.key !== raw.key) {
+      c = { key: raw.key, base: rawPos, at: now, playing, lastRaw: rawPos };
+    } else {
+      if (rawPos !== c.lastRaw) {
+        // the player said something new: believe it
+        c.base = rawPos;
+        c.at = now;
+        c.lastRaw = rawPos;
+      }
+      if (c.playing !== playing) {
+        if (c.playing) c.base += (now - c.at) / 1000;
+        c.at = now;
+        c.playing = playing;
+      }
+    }
+    this.clock = c;
+    return c.base + (c.playing ? (now - c.at) / 1000 : 0);
   }
 
   /**
@@ -182,13 +218,25 @@ class SystemWatch extends EventEmitter {
       }
       return;
     }
-    const playing = raw.status === 'Playing';
+    // (a browser known only by its title does not say whether it plays)
+    const playing = raw.status === 'Playing' || (raw.status === 'Unknown' && raw.fromTitle && this.titlePlaying);
     let position = Number(raw.position) || 0;
-    const duration = Number(raw.duration) || 0;
+    let duration = Number(raw.duration) || 0;
+    let estimated = false;
+    const nowMs = Date.now();
     // The player reports where it was at `updated`; bring that forward to now.
-    if (playing && raw.updated > 0 && raw.now >= raw.updated) {
-      const drift = (raw.now - raw.updated) / 1000;
-      if (drift < 3600) position += drift;
+    // A believable report: a real moment (not year 1601), and a length to go with it.
+    const reported = duration > 0 && raw.updated > 1e12 && raw.now >= raw.updated - 5000;
+    if (reported) {
+      this.clock = null;
+      if (playing) {
+        const drift = Math.max(0, (raw.now - raw.updated) / 1000);
+        if (drift < 3600) position += drift;
+      }
+    } else {
+      position = this.ownClock(raw, playing, nowMs);
+      estimated = true;
+      if (!duration) duration = this.durations.get(raw.key) || 0;
     }
     if (duration > 0) position = Math.min(position, duration);
     const next = {
@@ -206,6 +254,7 @@ class SystemWatch extends EventEmitter {
       canSeek: Boolean(raw.canSeek),
       liked: typeof raw.liked === 'boolean' ? raw.liked : null, // known only for the island's own service
       fromTitle: Boolean(raw.fromTitle),
+      estimated, // the time is counted by the island, not reported by the player
     };
 
     let coverChanged = false;
@@ -243,7 +292,7 @@ class SystemWatch extends EventEmitter {
     const prev = this.media;
     const trackChanged = !prev || prev.key !== next.key;
     const stateChanged = trackChanged || prev.playing !== next.playing || prev.duration !== next.duration ||
-      prev.canSeek !== next.canSeek || prev.liked !== next.liked || Math.abs((prev.position + (prev.playing ? (next.at - prev.at) / 1000 : 0)) - next.position) > 1.5;
+      prev.canSeek !== next.canSeek || prev.estimated !== next.estimated || prev.liked !== next.liked || Math.abs((prev.position + (prev.playing ? (next.at - prev.at) / 1000 : 0)) - next.position) > 1.5;
     this.media = next;
     if (stateChanged || coverChanged) {
       // What was already playing when the app started is not news.
@@ -294,6 +343,24 @@ class SystemWatch extends EventEmitter {
       const ok = await this.helper.tryCall('media.cmd', { action, position, app: to }, false);
       setTimeout(() => this.pollMedia(), 250);
       return ok;
+    }
+    const m = this.media;
+    if (m && m.fromTitle && (action === 'toggle' || action === 'play' || action === 'pause')) {
+      // nobody says whether such a browser plays: remember what we asked for
+      const want = action === 'toggle' ? !m.playing : action === 'play';
+      if (want === m.playing) return true;
+      this.titlePlaying = want;
+      if (this.page && this.page.key === m.key) this.page = null;
+    }
+    if (m && action === 'seek' && m.estimated && !m.canSeek) {
+      // The player cannot be rewound from outside. Moving the slider then says
+      // where the track really is: the island's own count starts from there.
+      if (this.clock && this.clock.key === m.key) {
+        this.clock.base = Math.max(0, Number(position) || 0);
+        this.clock.at = Date.now();
+      }
+      this.pollMedia();
+      return true;
     }
     if (this.media && String(this.media.app).startsWith('kaplya:web')) {
       // the island's own music service is driven from its page
