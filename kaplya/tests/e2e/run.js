@@ -259,7 +259,7 @@ async function main() {
     // silent and in step with the browser
     await until(async () => (await inVideo('window.__v')).muted === true && (await inVideo('window.__v')).paused === false, 'the copy plays, muted');
     assert.equal(await k.page.locator('.video-bar button[data-act="video-own"]').count(), 1);
-    assert.match(await text(k, '.video-note'), /управляют видео в браузере/);
+    assert.match(await text(k, '.video-note'), /управляют браузером/);
     await k.settle(300);
     await k.shot('home-video');
     // a pause made on the video itself reaches the browser

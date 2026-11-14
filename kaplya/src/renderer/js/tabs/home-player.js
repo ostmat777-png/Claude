@@ -525,9 +525,9 @@ export function createPlayer(app, hooks) {
           : h('button', { class: 'btn small primary', data: { act: 'video-own' }, title: 'Браузер замолчит, видео со звуком пойдёт здесь', onclick: () => takeOver() }, icon('volume-2', 13), 'Звук в острове'),
         h('span', {
           class: 'faint video-note ellipsis',
-          text: video.own ? 'Видео играет в острове: пауза, перемотка и звук прямо на нём'
-            : canFollow ? 'Пауза и перемотка здесь управляют видео в браузере'
-              : 'Чтобы перематывать и слушать здесь, нажмите «Звук в острове»',
+          text: video.own ? 'Играет в острове: управляйте прямо на видео'
+            : canFollow ? 'Пауза и перемотка управляют браузером'
+              : 'Перемотка — после «Звук в острове»',
         }),
         h('span', { class: 'grow' }),
         h('button', { class: 'ghost', title: 'Свернуть видео', onclick: () => setStage('none') }, icon('chevron-up', 15))));
