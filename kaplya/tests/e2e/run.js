@@ -214,8 +214,23 @@ async function main() {
     await k.page.locator('.player-sources .chip', { hasText: 'Google Chrome' }).click();
     await until(async () => (await text(k, '.player-title')) === 'Lo-fi beats to study to', 'the browser tab followed');
     assert.match(await text(k, '.player-artist'), /Lofi Girl · Google Chrome/);
+    // the mini video: off by default; on, the same YouTube video stands in for the cover
+    assert.equal(await k.page.locator('.player.has-video').count(), 0);
+    await k.main(() => globalThis.__kaplyaTest.store.set('settings.youtubeMini', true));
+    await until(async () => (await k.page.locator('.player.has-video .player-video webview[data-video-id="jfKfPfyJRdk"]').count()) === 1, 'mini video found and shown');
+    await k.page.click('.player-video');
+    await until(async () => (await k.page.locator('.player.video-big').count()) === 1, 'video made bigger');
+    const big = await k.page.locator('.player-video').boundingBox();
+    assert.ok(big.width > 300 && Math.abs(big.width / big.height - 16 / 9) < 0.05, 'a big 16:9 video: ' + JSON.stringify(big));
+    await k.settle(300);
+    await k.shot('home-video');
+    await k.page.click('.player-video');
+    await until(async () => (await k.page.locator('.player.video-big').count()) === 0, 'video small again');
     await k.page.locator('.player-sources .chip', { hasText: 'MockPlayer' }).click();
     await until(async () => (await text(k, '.player-title')) === 'Тёплый берег', 'back to the program');
+    // a program, not a browser: no video
+    await until(async () => (await k.page.locator('.player.has-video').count()) === 0, 'no video for a program');
+    await k.main(() => globalThis.__kaplyaTest.store.set('settings.youtubeMini', false));
     await k.helper('mock.set', { second: false });
     assert.equal(await k.page.locator('.tools .tool').count(), 8);
     await k.shot('home');

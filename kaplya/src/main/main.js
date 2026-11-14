@@ -913,6 +913,7 @@ function registerIpc() {
     return undefined;
   });
   handle('media:follow', (id) => system.follow(String(id || '')));
+  handle('youtube:find', (title, channel) => netApi.youtubeFind(String(title || ''), String(channel || '')));
 
   // --- clipboard
   handle('clip:list', () => clips.list());

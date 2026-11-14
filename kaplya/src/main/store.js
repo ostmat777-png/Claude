@@ -22,6 +22,7 @@ const DEFAULTS = {
     trackToast: true,
     lyrics: true,
     coverSearch: true, // look for a cover on the internet when the player gives none
+    youtubeMini: false, // a small copy of the YouTube video playing in a browser, in the player
     activity: true, // count how long each program is in front (the Активность tab)
     weather: { place: null, askedOnce: false, map: false, mapLayer: 'nowcast' },
     hotkeys: {

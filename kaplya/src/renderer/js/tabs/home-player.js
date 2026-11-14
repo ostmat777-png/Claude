@@ -78,6 +78,90 @@ export function createPlayer(app, hooks) {
   let sessions = [];
 
   // ---------------------------------------------------------------- the top row
+  // ---------------------------------------------------------------- a small copy of the YouTube video
+  // When a browser plays a YouTube video, the same video plays here, muted and in
+  // step, in place of the cover. A click makes it bigger, still inside the island.
+  const BROWSERS = /chrome|msedge|firefox|opera|yandex|browser|brave|vivaldi|308046B0AF4A39CB/i;
+  const video = { key: null, id: null, ids: [], view: null, timer: 0 };
+  // YouTube shows embedded videos only to players that say where they are
+  const EMBED_REFERRER = 'https://kaplya.github.io/';
+  const videoBox = h('div', { class: 'player-video', hidden: true, title: 'Сделать видео больше', onclick: () => setStage(stage === 'video' ? 'none' : 'video') });
+
+  function wantVideo(m) {
+    return Boolean(app.settings.youtubeMini && m && BROWSERS.test(m.app || '') && !String(m.app).startsWith('kaplya:'));
+  }
+
+  function embedUrl(id, at) {
+    return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&modestbranding=1&origin=${encodeURIComponent(EMBED_REFERRER.slice(0, -1))}&start=${Math.max(0, Math.floor(at))}`;
+  }
+
+  function dropVideo() {
+    clearInterval(video.timer);
+    if (video.view) video.view.remove();
+    Object.assign(video, { key: null, id: null, ids: [], view: null, timer: 0 });
+    videoBox.hidden = true;
+    el.classList.remove('has-video');
+    if (stage === 'video') setStage('none');
+  }
+
+  async function paintVideo(m) {
+    if (!wantVideo(m)) {
+      if (video.key) dropVideo();
+      return;
+    }
+    if (video.key === m.key) return;
+    dropVideo();
+    video.key = m.key;
+    const ids = await api.invoke('youtube:find', m.title, m.artist).catch(() => []);
+    if (!Array.isArray(ids) || !ids.length || video.key !== m.key) return;
+    video.ids = ids.slice();
+    showVideo(m, video.ids.shift());
+  }
+
+  function showVideo(m, id) {
+    if (video.view) video.view.remove();
+    video.id = id;
+    const view = document.createElement('webview');
+    view.setAttribute('partition', 'persist:web');
+    view.setAttribute('httpreferrer', EMBED_REFERRER);
+    view.setAttribute('src', app.test ? 'about:blank' : embedUrl(id, position(m)));
+    view.dataset.videoId = id;
+    video.view = view;
+    videoBox.append(view);
+    videoBox.hidden = false;
+    el.classList.add('has-video');
+    // keep it in step with the browser: the same moment, playing or paused
+    clearInterval(video.timer);
+    video.timer = setInterval(() => syncVideo(), 2000);
+    hooks.resized();
+  }
+
+  async function syncVideo() {
+    const m = app.sys.media;
+    if (!video.view || !m || m.key !== video.key || app.test) return;
+    const at = position(m);
+    try {
+      const broken = await video.view.executeJavaScript(`(() => {
+        const text = document.body ? document.body.innerText : '';
+        if (document.querySelector('.ytp-error') || /Error 15\\d|Video unavailable|isn.t available|недоступн|Ошибка/i.test(text)) return true;
+        const v = document.querySelector('video');
+        if (!v) return false;
+        v.muted = true;
+        if (Math.abs(v.currentTime - ${at}) > 2.5) v.currentTime = ${at};
+        if (${m.playing} && v.paused) v.play().catch(() => {});
+        if (${!m.playing} && !v.paused) v.pause();
+        return false;
+      })()`);
+      // the owner does not allow the video to be shown elsewhere: the next match, or back to the cover
+      if (broken) {
+        if (video.ids.length) showVideo(m, video.ids.shift());
+        else dropVideo();
+      }
+    } catch {
+      // still loading
+    }
+  }
+
   const cover = h('img', { class: 'player-cover', alt: '' });
   const coverBlank = h('div', { class: 'player-cover blank' }, icon('music', 26));
   const glow = h('div', { class: 'player-glow' });
@@ -121,7 +205,7 @@ export function createPlayer(app, hooks) {
   const el = h('div', { class: 'player card', hidden: true },
     glow,
     h('div', { class: 'player-row' },
-      h('div', { class: 'player-art' }, cover, coverBlank),
+      h('div', { class: 'player-art' }, cover, coverBlank, videoBox),
       h('div', { class: 'player-meta' },
         title, artist,
         h('div', { class: 'player-controls' }, btnPrev, btnPlay, btnNext, h('span', { class: 'grow' }), btnLike, btnLikes),
@@ -173,6 +257,9 @@ export function createPlayer(app, hooks) {
   // ---------------------------------------------------------------- stage
   function setStage(next) {
     if (next === 'lyrics' && !lyrics.lines.length && !lyrics.plain) next = 'none';
+    if (next === 'video' && !video.view) next = 'none';
+    el.classList.toggle('video-big', next === 'video');
+    videoBox.title = next === 'video' ? 'Сделать видео меньше' : 'Сделать видео больше';
     stage = next;
     lineIndex = -2;
     paintStage();
@@ -192,8 +279,9 @@ export function createPlayer(app, hooks) {
     teaser.hidden = stage !== 'none' || !(lyrics.lines.length || lyrics.plain) || lyrics.key !== (app.sys.media && app.sys.media.key);
     btnLikes.classList.toggle('on', stage === 'likes');
     el.classList.toggle('open', stage !== 'none');
-    if (stage === 'none') {
+    if (stage === 'none' || stage === 'video') {
       clear(stageEl);
+      stageEl.hidden = true;
       return;
     }
     if (stage === 'lyrics') {
@@ -343,6 +431,7 @@ export function createPlayer(app, hooks) {
     const was = !el.hidden;
     el.hidden = !m;
     if (!m) {
+      if (video.key) dropVideo();
       if (was) hooks.resized();
       return;
     }
@@ -361,6 +450,7 @@ export function createPlayer(app, hooks) {
     timeAll.textContent = m.duration ? formatTime(m.duration) : '';
     paintLike();
     paintSources();
+    paintVideo(m);
     if (lyrics.key !== m.key) loadLyrics(m);
     paintProgress();
     if (!was) hooks.resized();
@@ -368,6 +458,7 @@ export function createPlayer(app, hooks) {
 
   app.on('media', () => shown && paint());
   app.on('store', (key) => {
+    if (key === 'settings.youtubeMini') paintVideo(app.sys.media);
     if (shown && key === 'likes') {
       paintLike();
       if (stage === 'likes') paintStage();

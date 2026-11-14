@@ -592,7 +592,9 @@ function wire() {
 
   app.on('store', (key) => {
     if (key.startsWith('settings.')) applyLook(app.settings, app.sys.dark);
-    if (key.startsWith('settings.weather')) refreshWeather(true);
+    // a new city (not the map's layer) means a new forecast
+    if (key === 'settings.weather' || key === 'settings.weather.place') refreshWeather(true);
+    if (key === 'settings.weather.map') app.emit('weather', app.weather);
     if (key === 'settings.showSeconds' || key === 'settings.showWeather') {
       lastClock = '';
       paintPill();

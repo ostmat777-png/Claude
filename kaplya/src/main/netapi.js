@@ -63,6 +63,44 @@ function chunks(text, max) {
   return out;
 }
 
+/** Videos on a YouTube search page: { id, title, channel }. Both the old and the new page layout. */
+function youtubeResults(html) {
+  const m = /var ytInitialData = (\{.*?\});<\/script>/s.exec(String(html));
+  if (!m) return [];
+  let data;
+  try {
+    data = JSON.parse(m[1]);
+  } catch {
+    return [];
+  }
+  const out = [];
+  const text = (x) => (x && (x.content || x.simpleText || (x.runs || []).map((r) => r.text).join(''))) || '';
+  const walk = (o) => {
+    if (!o || typeof o !== 'object' || out.length >= 20) return;
+    if (Array.isArray(o)) {
+      for (const x of o) walk(x);
+      return;
+    }
+    if (o.videoRenderer && o.videoRenderer.videoId) {
+      const v = o.videoRenderer;
+      out.push({ id: v.videoId, title: text(v.title), channel: text(v.ownerText) });
+    } else if (o.lockupViewModel && o.lockupViewModel.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
+      const v = o.lockupViewModel;
+      const md = v.metadata && v.metadata.lockupMetadataViewModel;
+      const rows = md && md.metadata && md.metadata.contentMetadataViewModel && md.metadata.contentMetadataViewModel.metadataRows;
+      let channel = '';
+      for (const part of (rows && rows[0] && rows[0].metadataParts) || []) {
+        channel = text(part.text) || (part.avatarStack && text(part.avatarStack.avatarStackViewModel && part.avatarStack.avatarStackViewModel.text)) || '';
+        if (channel) break;
+      }
+      out.push({ id: v.contentId, title: text(md && md.title), channel });
+    }
+    for (const k of Object.keys(o)) walk(o[k]);
+  };
+  walk(data);
+  return out.filter((v) => /^[\w-]{11}$/.test(v.id));
+}
+
 class NetApi {
   /** @param {typeof fetch} fetchFn */
   constructor(fetchFn, shared) {
@@ -71,6 +109,7 @@ class NetApi {
     this.weatherCache = null; // { key, data }
     this.lyricsCache = new Map();
     this.coverCache = new Map();
+    this.ytCache = new Map();
   }
 
   /**
@@ -179,6 +218,54 @@ class NetApi {
     }
   }
 
+  /**
+   * The YouTube video a browser is playing, found by the title and channel that
+   * Windows reports for it. Only an exact enough match counts.
+   * @returns {Promise<string[]>} ids of matching videos, best first (some may not allow being shown elsewhere)
+   */
+  async youtubeFind(title, channel) {
+    const t = String(title || '').trim();
+    if (!t) return [];
+    const key = (channel + '|' + t).toLowerCase();
+    if (this.ytCache.has(key)) return this.ytCache.get(key);
+    let ids = [];
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 10000);
+      let html = '';
+      try {
+        const res = await this.fetch('https://www.youtube.com/results?search_query=' + encodeURIComponent(`${t} ${channel || ''}`.trim()), {
+          signal: ctl.signal,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', 'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8' },
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        html = await res.text();
+      } finally {
+        clearTimeout(timer);
+      }
+      const want = plainTitle(t);
+      const ch = plainTitle(channel);
+      const list = youtubeResults(html);
+      const same = (v) => plainTitle(v.title) === want;
+      const close = (v) => {
+        const got = plainTitle(v.title);
+        return got && want && (got.includes(want) || want.includes(got)) && sameTrack({ title: t, artist: channel }, { title: v.title, artist: v.channel });
+      };
+      // the same title from the same channel; then the same title; then a close one
+      const ranked = [
+        ...list.filter((v) => same(v) && ch && plainTitle(v.channel) === ch),
+        ...list.filter(same),
+        ...list.filter(close),
+      ];
+      ids = [...new Set(ranked.map((v) => v.id))].slice(0, 4);
+    } catch {
+      return []; // offline: try again next time
+    }
+    this.ytCache.set(key, ids);
+    if (this.ytCache.size > 60) this.ytCache.delete(this.ytCache.keys().next().value);
+    return ids;
+  }
+
   /** Downloads a picture and returns it as a data: URL. */
   async imageDataUrl(url, maxBytes = 2 * 1024 * 1024) {
     const ctl = new AbortController();
@@ -275,4 +362,4 @@ class NetApi {
   }
 }
 
-module.exports = { NetApi, plainTitle, sameTrack, chunks };
+module.exports = { NetApi, plainTitle, sameTrack, chunks, youtubeResults };

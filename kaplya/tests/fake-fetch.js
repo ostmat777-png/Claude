@@ -80,6 +80,13 @@ module.exports = async function fakeFetch(url, init = {}) {
     const known = (PHRASES[`${sl}>${tl}`] || {})[q.trim()];
     return json({ src: sl, sentences: [{ trans: known || `[${tl}] ${q}`, orig: q }] });
   }
+  if (u.hostname === 'www.youtube.com' && u.pathname === '/results') {
+    const data = { contents: [{ lockupViewModel: { contentId: 'jfKfPfyJRdk', contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', metadata: { lockupMetadataViewModel: {
+      title: { content: 'Lo-fi beats to study to' },
+      metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: 'Lofi Girl' } }] }] } } } } } }] };
+    const html = `<html><script>var ytInitialData = ${JSON.stringify(data)};</script></html>`;
+    return { ok: true, status: 200, text: async () => html, json: async () => ({}) };
+  }
   if (u.hostname === 'api.open-meteo.com') return json(forecast());
   if (u.hostname === 'geocoding-api.open-meteo.com') {
     const name = u.searchParams.get('name') || '';

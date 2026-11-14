@@ -357,6 +357,7 @@ export default {
     let mapView = null;
     function mapUrl(layer) {
       const p = app.settings.weather.place;
+      if (app.test) return 'data:text/html,<title>' + layer + '</title>'; // no internet in tests
       return `https://yandex.ru/pogoda/ru/maps/${layer}?lat=${p.lat.toFixed(4)}&lon=${p.lon.toFixed(4)}&z=7`;
     }
 
@@ -366,9 +367,10 @@ export default {
         class: 'chip' + (id === layer ? ' on' : ''),
         data: { layer: id },
         onclick: () => {
+          // only the page changes; the rest stays as it is
           app.set('settings.weather.mapLayer', id);
-          if (mapView) mapView.setAttribute('src', app.test ? 'about:blank' : mapUrl(id));
-          paint();
+          for (const c of chips.children) c.classList.toggle('on', c.dataset.layer === id);
+          if (mapView) mapView.setAttribute('src', mapUrl(id));
         },
       }, icon(ic, 12), name)));
       if (!mapView) {
@@ -376,7 +378,7 @@ export default {
         mapView.setAttribute('partition', 'persist:web');
         mapView.className = 'wmap-frame';
       }
-      const want = app.test ? 'about:blank' : mapUrl(layer);
+      const want = mapUrl(layer);
       if (mapView.getAttribute('src') !== want) mapView.setAttribute('src', want);
       root.append(h('div', { class: 'wmap' },
         h('div', { class: 'wmap-bar' }, chips, h('span', { class: 'grow' }),
