@@ -1,0 +1,26 @@
+name: Kaplya media probe
+
+# A real browser playing sound on real Windows, read by the helper. Quick to run:
+# only when the probe or the helper changes.
+on:
+  push:
+    paths:
+      - 'kaplya/tests/probe/**'
+      - 'kaplya/src/helper/**'
+      - '.github/workflows/kaplya-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: kaplya
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Probe
+        run: node tests/probe/media-probe.js

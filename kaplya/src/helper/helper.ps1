@@ -545,6 +545,178 @@ function Invoke-MediaCmd($a) {
     return [bool](Wait-Op $op ([bool]) 4000)
 }
 
+# ---------------------------------------------------------------- the player's own window
+# Windows has no "like" command for players, and some browsers tell Windows
+# nothing about what they play. But a program's window says what is in it to
+# screen readers (UI Automation): its buttons by name, its sliders by value. So
+# the island can press the player's own "like" button, and read where a video is.
+
+function Initialize-Uia {
+    if ($script:UiaReady) { return }
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    $script:UiaReady = $true
+}
+
+$script:PlayerExe = 'spotify|music|aimp|vk|deezer|soundcloud|zvuk|foobar|winamp|itunes|tidal'
+
+# Process ids whose windows may hold the player called $app (Windows' name for
+# it, or "title:browser.exe").
+function Get-PlayerPids($app) {
+    Initialize-Native
+    $want = (([string]$app).ToLower() -replace '^title:', '' -replace '\.exe$', '') -replace '[^a-z0-9]', ''
+    if ($want -eq '308046b0af4a39cb') { $want = 'firefox' }
+    $exact = @()
+    $rest = @()
+    foreach ($line in @([Kaplya.Win]::WindowTitles())) {
+        $parts = ([string]$line).Split('|', 3)
+        if ($parts.Count -lt 3) { continue }
+        $id = [int]$parts[0]
+        if ($id -eq $PID) { continue }
+        $exe = $parts[1].ToLower()
+        $n = $exe -replace '[^a-z0-9]', ''
+        if ($want -and $n.Length -ge 3 -and ($want.Contains($n) -or $n.Contains($want))) { $exact += $id }
+        elseif (($script:BrowserExe -contains $exe) -or ($exe -match $script:PlayerExe) -or ($parts[2] -match 'YouTube|Музыка|Music|Spotify')) { $rest += $id }
+    }
+    if ($exact.Count -gt 0) { return @($exact | Select-Object -Unique) }
+    return @($rest | Select-Object -Unique)
+}
+
+$script:LikeGood = 'нравится|понрави|like|лайк|избранн|любим|медиатек|save to your'
+$script:LikeBad = '(^|[^а-яёa-z])не (нравится|понрави)|dislike|комментар|comment|ответ|reply|рекоменд|playlist|плейлист'
+$script:SeekGood = 'перемот|seek|progress|прогресс|воспроизведения|playback|timeline|хронометраж'
+
+# What the player's window shows: its "like" button, its seek slider, the address
+# of the page. Looks through the windows of the player's processes.
+function Get-PlayerPage($app) {
+    Initialize-Uia
+    $AE = [System.Windows.Automation.AutomationElement]
+    $CT = [System.Windows.Automation.ControlType]
+    $types = @($CT::Button, $CT::Slider, $CT::Edit, $CT::CheckBox)
+    $conds = @()
+    foreach ($t in $types) { $conds += (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $t)) }
+    $cond = New-Object System.Windows.Automation.OrCondition($conds)
+    $cache = New-Object System.Windows.Automation.CacheRequest
+    $cache.Add($AE::NameProperty)
+    $cache.Add($AE::ControlTypeProperty)
+    $cache.Add($AE::BoundingRectangleProperty)
+    $res = @{ like = $null; likeName = ''; liked = $null; position = $null; duration = $null; url = ''; windows = 0; seen = 0 }
+    $best = $null
+    $bestScore = -1.0
+    foreach ($id in (Get-PlayerPids $app)) {
+        $wins = $AE::RootElement.FindAll('Children', (New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, [int]$id)))
+        foreach ($win in $wins) {
+            $res.windows += 1
+            $scope = $cache.Activate()
+            try { $all = $win.FindAll('Descendants', $cond) } catch { $all = @() } finally { $scope.Dispose() }
+            foreach ($e in $all) {
+                $res.seen += 1
+                $name = [string]$e.Cached.Name
+                $type = $e.Cached.ControlType
+                $r = $e.Cached.BoundingRectangle
+                if ($type -eq $CT::Edit) {
+                    if (-not $res.url) {
+                        try {
+                            $v = [string]$e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+                            if ($v -match 'youtube\.com/|youtu\.be/|music\.yandex|vk\.com|spotify\.com|soundcloud\.com') { $res.url = $v }
+                        } catch {}
+                    }
+                    continue
+                }
+                if ($type -eq $CT::Slider) {
+                    if ($null -eq $res.duration -and $name -match $script:SeekGood) {
+                        try {
+                            $rv = $e.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current
+                            if ($rv.Maximum -gt 1) {
+                                $res.position = [double]$rv.Value - [double]$rv.Minimum
+                                $res.duration = [double]$rv.Maximum - [double]$rv.Minimum
+                            }
+                        } catch {}
+                    }
+                    continue
+                }
+                if (-not $name -or $name -notmatch $script:LikeGood -or $name -match $script:LikeBad) { continue }
+                if ($r.IsEmpty -or $r.Width -le 0) { continue }
+                # the video's or the player bar's own button: the one about "the video", else the lowest
+                $score = [double]$r.Bottom
+                if ($name -match 'видео|video') { $score += 100000 }
+                if ($score -gt $bestScore) { $bestScore = $score; $best = $e }
+            }
+        }
+    }
+    if ($best) {
+        $res.like = $best
+        $res.likeName = [string]$best.Cached.Name
+        try {
+            $st = [string]$best.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState
+            $res.liked = ($st -eq 'On')
+        } catch {}
+    }
+    return $res
+}
+
+function Get-PlayerPageWaiting($app) {
+    # A browser starts describing its pages only when somebody asks; the first look
+    # may find just the frame of the window. Look again a moment later.
+    $res = $null
+    for ($i = 0; $i -lt 4; $i++) {
+        $res = Get-PlayerPage $app
+        if ($res.like -or $null -ne $res.duration) { break }
+        Start-Sleep -Milliseconds 600
+    }
+    return $res
+}
+
+function ConvertTo-PageResult($res) {
+    return @{
+        found = [bool]$res.like
+        liked = $res.liked
+        likeName = $res.likeName
+        position = $res.position
+        duration = $res.duration
+        url = $res.url
+        windows = $res.windows
+        seen = $res.seen
+    }
+}
+
+function Invoke-PageRead($a) {
+    return ConvertTo-PageResult (Get-PlayerPageWaiting $a.app)
+}
+
+# Presses the player's own "like". With want = true/false nothing is pressed when
+# the button already says so.
+function Invoke-PageLike($a) {
+    $res = Get-PlayerPageWaiting $a.app
+    $out = ConvertTo-PageResult $res
+    $out.pressed = $false
+    if (-not $res.like) { return $out }
+    if ($null -ne $a.want -and $null -ne $res.liked -and ([bool]$a.want -eq [bool]$res.liked)) { return $out }
+    $e = $res.like
+    $done = $false
+    try {
+        $e.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        $done = $true
+    } catch {}
+    if (-not $done) {
+        try {
+            $e.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+            $done = $true
+        } catch {}
+    }
+    $out.pressed = $done
+    if ($done) {
+        Start-Sleep -Milliseconds 500
+        try {
+            $st = [string]$e.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState
+            $out.liked = ($st -eq 'On')
+        } catch {
+            if ($null -ne $res.liked) { $out.liked = -not $res.liked }
+        }
+    }
+    return $out
+}
+
 # ---------------------------------------------------------------- volume
 
 function Get-VolumeState {
@@ -916,6 +1088,8 @@ function Invoke-Cmd([string]$cmd, $a) {
         'media.get' { return Invoke-MediaGet $a }
         'media.sessions' { return Invoke-MediaSessions $a }
         'media.cmd' { return Invoke-MediaCmd $a }
+        'page.read' { return Invoke-PageRead $a }
+        'page.like' { return Invoke-PageLike $a }
         'volume.get' { return Get-VolumeState }
         'volume.set' { return Invoke-VolumeSet $a }
         'sys.poll' { return Invoke-SysPoll $a }
