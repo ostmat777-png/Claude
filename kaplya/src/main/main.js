@@ -922,6 +922,17 @@ function registerIpc() {
     return undefined;
   });
   handle('media:follow', (id) => system.follow(String(id || '')));
+  // Everything the island knows about players, as text: to send when something does not work.
+  handle('media:report', async () => {
+    const out = { version: app.getVersion(), electron: process.versions.electron, os: `${os.type()} ${os.release()}`, helper: helper.supported };
+    out.ping = await helper.tryCall('ping', {}, 'no answer', 15000);
+    out.sessions = await helper.call('media.sessions', {}, 15000).catch((e) => 'error: ' + (e && e.message));
+    out.shown = system.media ? { app: system.media.app, title: system.media.title, playing: system.media.playing, position: Math.round(system.media.position), duration: Math.round(system.media.duration), fromTitle: system.media.fromTitle } : null;
+    const started = Date.now();
+    out.window = await helper.call('page.read', { app: system.media ? system.media.app : '' }, 30000).catch((e) => 'error: ' + (e && e.message));
+    out.windowMs = Date.now() - started;
+    return JSON.stringify(out, null, 1);
+  });
   handle('youtube:find', (title, channel) => netApi.youtubeFind(String(title || ''), String(channel || '')));
 
   // --- clipboard

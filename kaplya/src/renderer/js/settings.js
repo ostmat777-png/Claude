@@ -158,7 +158,20 @@ function playersCheck() {
     for (const w of r.youtubeWindows || []) {
       rows.push(h('div', { class: 'pc-row' }, icon('globe', 12), h('b', { text: w.title }), h('span', { class: 'row-hint', text: w.exe + ' · по заголовку окна' })));
     }
-    clear(out, rows.length ? rows : h('div', { class: 'row-hint', text: 'Windows не знает ни одного играющего плеера, и окон YouTube не видно. Если YouTube открыт в браузере, сделайте вкладку с ним активной.' }));
+    // the full report, to send when something does not work
+    const report = await api.invoke('media:report').catch((e) => String(e));
+    rows.push(h('div', { class: 'pc-row' },
+      h('button', {
+        class: 'btn small',
+        data: { act: 'players-report' },
+        text: 'Скопировать отчёт',
+        onclick: async (e) => {
+          await api.invoke('clip:write', report);
+          e.currentTarget.textContent = 'Скопировано, вставьте в сообщение';
+        },
+      }),
+      h('span', { class: 'row-hint', text: 'Версия ' + (/"version": "([^"]+)"/.exec(report) || [0, '?'])[1] })));
+    clear(out, rows.length > 1 ? rows : [rows[0], h('div', { class: 'row-hint', text: 'Windows не знает ни одного играющего плеера, и окон YouTube не видно. Если YouTube открыт в браузере, сделайте вкладку с ним активной.' })]);
   };
   return h('div', { class: 'row tall' },
     h('div', { class: 'row-text' }, h('div', { text: 'Что видит Windows' }),
