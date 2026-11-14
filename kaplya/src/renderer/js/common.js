@@ -22,6 +22,7 @@ export function translateUrl(search, text) {
 
 // Program identifiers as Windows reports them -> names a person recognises.
 const APP_NAMES = [
+  [/^title:browser\.exe/i, 'Яндекс Браузер'],
   [/spotify/i, 'Spotify'],
   [/yandex.*music|music.*yandex/i, 'Яндекс Музыка'],
   [/yandex/i, 'Яндекс Браузер'],
@@ -54,6 +55,7 @@ export const MUSIC_SERVICES = [
 export function appLabel(id) {
   const s = String(id || '');
   if (!s) return '';
+  if (s.startsWith('title:')) return appLabel(s.slice(6)); // a browser known by its window title
   if (s.startsWith('kaplya:web')) {
     const svc = MUSIC_SERVICES.find((x) => x.id === s.slice('kaplya:web:'.length));
     return 'Капля · ' + (svc ? svc.name : 'Плеер');

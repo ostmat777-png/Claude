@@ -883,7 +883,7 @@ function registerIpc() {
   handle('lyrics:get', (track) => (store.get('settings.lyrics') === false ? null : netApi.lyrics(track || {})));
   handle('media:sessions', async () => {
     const r = await helper.tryCall('media.sessions', {}, { sessions: [] }, 8000);
-    return { sessions: system.sessions((r && r.sessions) || []) };
+    return { sessions: system.sessions((r && r.sessions) || []), youtubeWindows: (r && r.youtubeWindows) || [] };
   });
   // the music service inside the island: what it plays, and its cover
   const webCovers = new Map();

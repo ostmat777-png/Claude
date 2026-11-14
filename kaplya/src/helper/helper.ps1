@@ -239,6 +239,34 @@ namespace Kaplya {
       return (long)(unchecked((uint)Environment.TickCount - info.dwTime));
     }
 
+    delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc proc, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+
+    // "pid|process|title" of every visible window that has a title.
+    public static string[] WindowTitles() {
+      var list = new System.Collections.Generic.List<string>();
+      EnumWindows(delegate (IntPtr h, IntPtr l) {
+        if (!IsWindowVisible(h)) return true;
+        var sb = new StringBuilder(512);
+        if (GetWindowText(h, sb, sb.Capacity) <= 0) return true;
+        uint pid;
+        GetWindowThreadProcessId(h, out pid);
+        string name = "";
+        try { name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch { }
+        list.Add(pid + "|" + name + "|" + sb.ToString());
+        return true;
+      }, IntPtr.Zero);
+      return list.ToArray();
+    }
+
+    // A press of a media key: play/pause (0xB3), next (0xB0), previous (0xB1).
+    public static void MediaKey(byte vk) {
+      keybd_event(vk, 0, 1, UIntPtr.Zero);      // KEYEVENTF_EXTENDEDKEY
+      keybd_event(vk, 0, 3, UIntPtr.Zero);      // ... | KEYEVENTF_KEYUP
+    }
+
     // "pid|title" of the window in front.
     public static string ForegroundApp() {
       IntPtr h = GetForegroundWindow();
@@ -275,14 +303,95 @@ function Get-MediaManager {
     return $script:MediaMgr
 }
 
-function Get-MediaSession($app) {
+function Test-Playing($s) {
+    try {
+        return ([string]$s.GetPlaybackInfo().PlaybackStatus -eq 'Playing')
+    } catch {
+        return $false
+    }
+}
+
+# Which player to show. Windows' own "current" one is often not the one you are
+# listening to: a paused music app stays current while a browser plays YouTube,
+# and sometimes there is no current one at all. So:
+#   1. the player asked for by name ($app), if it is there;
+#   2. one that is playing: the one shown last time, else Windows' current, else any;
+#   3. nothing plays: the one shown last time ($prefer), else Windows' current, else any.
+function Get-MediaSession($app, $prefer) {
     $mgr = Get-MediaManager
-    if ($app) {
-        foreach ($s in @($mgr.GetSessions())) {
-            if ([string]$s.SourceAppUserModelId -eq [string]$app) { return $s }
+    $all = @($mgr.GetSessions())
+    $byName = {
+        param($name)
+        if (-not $name) { return $null }
+        foreach ($s in $all) {
+            if ([string]$s.SourceAppUserModelId -eq [string]$name) { return $s }
+        }
+        return $null
+    }
+    $named = & $byName $app
+    if ($named) { return $named }
+    $cur = $null
+    try { $cur = $mgr.GetCurrentSession() } catch {}
+    $last = & $byName $prefer
+    if ($last -and (Test-Playing $last)) { return $last }
+    if ($cur -and (Test-Playing $cur)) { return $cur }
+    foreach ($s in $all) { if (Test-Playing $s) { return $s } }
+    if ($last) { return $last }
+    if ($cur) { return $cur }
+    if ($all.Count -gt 0) { return $all[0] }
+    return $null
+}
+
+# Browsers that do not tell Windows what they play: the window title of a YouTube
+# tab still says it ("Song - YouTube - Google Chrome"). Only the tab in front of
+# each browser window can be seen this way.
+$script:BrowserExe = @('chrome', 'msedge', 'browser', 'yandex', 'firefox', 'opera', 'opera_gx', 'brave', 'vivaldi', 'arc', 'chromium', 'atom')
+
+function Get-YouTubeWindows {
+    Initialize-Native
+    $list = @()
+    foreach ($line in @([Kaplya.Win]::WindowTitles())) {
+        $parts = ([string]$line).Split('|', 3)
+        if ($parts.Count -lt 3) { continue }
+        $exe = $parts[1].ToLower()
+        if ($script:BrowserExe -notcontains $exe) { continue }
+        $title = $parts[2]
+        if ($title -notmatch 'YouTube') { continue }
+        $list += @{ pid = [int]$parts[0]; exe = ($exe + '.exe'); title = $title }
+    }
+    return @($list)
+}
+
+function ConvertFrom-YouTubeTitle($title) {
+    # "(3) Song name - YouTube - Google Chrome", "Song name – YouTube Music — Яндекс Браузер"
+    $m = [regex]::Match([string]$title, '^(?:\(\d+\)\s*)?(.+?)\s+[-\u2013\u2014]\s+(YouTube(?: Music)?)(?:\s+[-\u2013\u2014]\s+.*)?$')
+    if (-not $m.Success) { return $null }
+    return @{ title = $m.Groups[1].Value.Trim(); site = $m.Groups[2].Value }
+}
+
+function Get-TitleMedia {
+    foreach ($w in (Get-YouTubeWindows)) {
+        $t = ConvertFrom-YouTubeTitle $w.title
+        if ($null -eq $t -or -not $t.title -or $t.title -eq 'YouTube') { continue }
+        $now = [long][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        return @{
+            app = 'title:' + $w.exe
+            title = $t.title
+            artist = $t.site
+            album = ''
+            status = 'Unknown'
+            position = 0.0
+            duration = 0.0
+            updated = $now
+            now = $now
+            key = 'title:' + $w.exe + '|' + $t.title
+            canPrev = $true
+            canNext = $true
+            canSeek = $false
+            fromTitle = $true
         }
     }
-    return $mgr.GetCurrentSession()
+    return $null
 }
 
 # Why the last cover could not be read: '' when it was, 'none' when the player gave
@@ -381,8 +490,12 @@ function Get-MediaInfo($s, $have, $noThumb) {
 }
 
 function Invoke-MediaGet($a) {
-    $s = Get-MediaSession $a.app
-    if ($null -eq $s) { return $null }
+    if ([string]$a.app -like 'title:*') { return Get-TitleMedia }
+    $s = Get-MediaSession $a.app $a.prefer
+    if ($null -eq $s) {
+        # no player told Windows anything: perhaps a browser that does not
+        try { return Get-TitleMedia } catch { return $null }
+    }
     return Get-MediaInfo $s $a.have
 }
 
@@ -399,11 +512,25 @@ function Invoke-MediaSessions($a) {
             $list += $i
         } catch {}
     }
-    return @{ sessions = @($list) }
+    $windows = @()
+    try {
+        foreach ($w in (Get-YouTubeWindows)) { $windows += @{ exe = $w.exe; title = $w.title } }
+    } catch {}
+    return @{ sessions = @($list); youtubeWindows = @($windows) }
 }
 
 function Invoke-MediaCmd($a) {
-    $s = Get-MediaSession $a.app
+    if ([string]$a.app -like 'title:*') {
+        # known only by its window title: the keyboard's media keys are all we have
+        Initialize-Native
+        switch ([string]$a.action) {
+            'next' { [Kaplya.Win]::MediaKey(0xB0) }
+            'prev' { [Kaplya.Win]::MediaKey(0xB1) }
+            default { [Kaplya.Win]::MediaKey(0xB3) }
+        }
+        return $true
+    }
+    $s = Get-MediaSession $a.app $a.prefer
     if ($null -eq $s) { return $false }
     $op = $null
     switch ([string]$a.action) {

@@ -129,7 +129,9 @@ class SystemWatch extends EventEmitter {
       let raw = null;
       if (this.helper.supported) {
         const app = this.followApp.startsWith('kaplya:web') ? '' : this.followApp;
-        raw = await this.helper.call('media.get', { have, app }, 8000).catch(() => null);
+        // the player shown now stays, unless another one starts playing
+        const prefer = this.media && !String(this.media.app).startsWith('kaplya:web') ? this.media.app : '';
+        raw = await this.helper.call('media.get', { have, app, prefer }, 8000).catch(() => null);
       }
       this.applyMedia(this.choose(raw));
     } catch {
@@ -266,7 +268,9 @@ class SystemWatch extends EventEmitter {
       setTimeout(() => this.pollMedia(), 400);
       return true;
     }
-    const ok = await this.helper.tryCall('media.cmd', { action, position, app: this.followApp || '' }, false);
+    // the command goes to the player that is shown, not to whichever Windows calls current
+    const app = this.followApp || (this.media ? this.media.app : '');
+    const ok = await this.helper.tryCall('media.cmd', { action, position, app }, false);
     setTimeout(() => this.pollMedia(), 250);
     return ok;
   }

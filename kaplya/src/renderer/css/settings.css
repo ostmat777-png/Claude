@@ -295,3 +295,31 @@ select.field {
   min-width: 180px;
   cursor: pointer;
 }
+
+.players-check {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.pc-row b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.pc-row .row-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

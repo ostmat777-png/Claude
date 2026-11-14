@@ -258,6 +258,23 @@ async function main() {
     assert.equal(await k.page.locator('#pill-left img').count(), 0);
   });
 
+  await scenario('youtube in a browser that tells Windows nothing: known by its window title', { env: { MOCK_NO_MEDIA: '1' } }, async (k) => {
+    await k.open('home');
+    assert.equal(await k.page.locator('.player[hidden]').count(), 1, 'nothing playing yet');
+    await k.helper('mock.set', { ytWindow: 'Тестовое видео - YouTube - Google Chrome' });
+    await until(async () => (await text(k, '.player-title').catch(() => '')) === 'Тестовое видео', 'the video from the window title', 8000);
+    assert.match(await text(k, '.player-artist'), /YouTube · Google Chrome/);
+    // the settings show what Windows sees
+    await k.main(() => globalThis.__kaplyaTest.openSettings('notifications'));
+    const s = await k.findPage('settings.html');
+    await s.waitForSelector('html[data-ready="true"]');
+    await s.click('button[data-act="players-check"]');
+    await until(async () => /Тестовое видео - YouTube.*по заголовку окна/s.test(await s.textContent('.players-check')), 'the check lists the window');
+    await s.screenshot({ path: path.join(OUT, 'settings-players.png') });
+    await k.helper('mock.set', { ytWindow: '' });
+    await until(async () => (await k.page.locator('.player[hidden]').count()) === 1, 'gone when the tab is closed', 8000);
+  });
+
   await scenario('programs row: sites, File Explorer, files and folders, with their own icons', {}, async (k) => {
     const dir = tmpDir('apps');
     const pic = path.join(dir, 'Обложка.png');
@@ -1531,6 +1548,31 @@ async function main() {
       await k.page.waitForSelector('#island[data-mode="toast"]', { timeout: 8000 });
       assert.match(await text(k, '.toast-text'), /обычный текст/);
       await k.page.waitForSelector('#island[data-mode="pill"]', { timeout: 8000 });
+
+      // A browser that tells Windows nothing still shows its YouTube tab in its
+      // window title. A stand-in "chrome.exe" with such a title:
+      const fakeDir = tmpDir('fakechrome');
+      const fakeExe = path.join(fakeDir, 'chrome.exe');
+      const build = spawnSync('powershell.exe', ['-NoProfile', '-EncodedCommand', encodePs(
+        "Add-Type -OutputType WindowsApplication -OutputAssembly '" + fakeExe + "' -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition '" +
+        'using System; using System.Windows.Forms; public static class P { [STAThread] public static void Main(string[] a) { var f = new Form(); f.Text = a[0]; f.Width = 400; f.Height = 200; var t = new Timer(); t.Interval = 20000; t.Tick += (s, e) => f.Close(); t.Start(); Application.Run(f); } }' +
+        "'")], { encoding: 'utf8' });
+      assert.equal(build.status, 0, 'could not build the stand-in browser: ' + build.stderr);
+      const { spawn } = require('node:child_process');
+      const fake = spawn(fakeExe, ['Тестовое видео - YouTube - Google Chrome'], { stdio: 'ignore' });
+      try {
+        await k.open('home');
+        await until(async () => (await text(k, '.player-title').catch(() => '')) === 'Тестовое видео', 'the video known by its window title', 15000);
+        assert.match(await text(k, '.player-artist'), /YouTube · Google Chrome/);
+        const seen = await k.page.evaluate(() => window.kaplya.invoke('media:sessions'));
+        assert.ok(seen.youtubeWindows.some((w) => w.exe === 'chrome.exe' && /Тестовое видео/.test(w.title)), JSON.stringify(seen));
+        console.log('      window-title fallback:', JSON.stringify(seen.youtubeWindows));
+        await k.page.keyboard.press('Escape');
+        await k.leave();
+      } finally {
+        fake.kill();
+      }
+      await until(async () => (await k.page.locator('.player[hidden]').count()) === 1 || (await k.mode()) !== 'open', 'window gone', 8000).catch(() => {});
 
       // the Start menu is searchable
       await k.main(() => globalThis.__kaplyaTest.openPalette());

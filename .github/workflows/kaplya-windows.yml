@@ -95,15 +95,16 @@ jobs:
       - name: Only the kaplya folder
         shell: bash
         working-directory: .
+        # a path without a drive letter: tar on Windows reads "D:" as another computer
         run: |
-          mkdir -p "$RUNNER_TEMP/kaplya-folder"
-          git archive --format=tar HEAD kaplya | tar -x -C "$RUNNER_TEMP/kaplya-folder"
+          mkdir -p _kaplya-folder
+          git archive --format=tar HEAD kaplya | tar -x -C _kaplya-folder
 
       - name: Keep the kaplya folder
         uses: actions/upload-artifact@v4
         with:
           name: Kaplya-folder
-          path: ${{ runner.temp }}/kaplya-folder
+          path: _kaplya-folder
           retention-days: 90
 
       - name: Keep the installer

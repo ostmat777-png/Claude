@@ -107,6 +107,12 @@ async function main() {
     await check('media.sessions', async () => {
       const r = await helper.call('media.sessions', {}, 30000);
       assert.ok(Array.isArray(r.sessions));
+      assert.ok(Array.isArray(r.youtubeWindows), 'browser windows with YouTube are listed');
+      return r;
+    });
+    await check('media.get with a player that is not there falls back without error', async () => {
+      const r = await helper.call('media.get', { app: 'NoSuch.Player', prefer: 'Nor.This' }, 30000);
+      if (r !== null) assert.strictEqual(typeof r.title, 'string');
       return r;
     });
     await check('media.cmd without a player', async () => {

@@ -144,8 +144,31 @@ function general() {
   ];
 }
 
+/** What Windows tells about players right now: to find out why one is not seen. */
+function playersCheck() {
+  const out = h('div', { class: 'players-check' });
+  const run = async () => {
+    clear(out, h('div', { class: 'row-hint', text: 'Спрашиваю Windows…' }));
+    const r = await api.invoke('media:sessions');
+    const rows = [];
+    for (const s of r.sessions || []) {
+      rows.push(h('div', { class: 'pc-row' }, icon(s.status === 'Playing' ? 'play' : 'pause', 12),
+        h('b', { text: s.title || '(без названия)' }), h('span', { class: 'row-hint', text: [s.artist, s.app].filter(Boolean).join(' · ') })));
+    }
+    for (const w of r.youtubeWindows || []) {
+      rows.push(h('div', { class: 'pc-row' }, icon('globe', 12), h('b', { text: w.title }), h('span', { class: 'row-hint', text: w.exe + ' · по заголовку окна' })));
+    }
+    clear(out, rows.length ? rows : h('div', { class: 'row-hint', text: 'Windows не знает ни одного играющего плеера, и окон YouTube не видно. Если YouTube открыт в браузере, сделайте вкладку с ним активной.' }));
+  };
+  return h('div', { class: 'row tall' },
+    h('div', { class: 'row-text' }, h('div', { text: 'Что видит Windows' }),
+      h('div', { class: 'row-hint', text: 'Плееры, о которых программы и браузеры сообщают Windows, и окна браузеров с YouTube. Если остров не видит музыку или видео, проверьте здесь' })),
+    h('div', { class: 'row-control' }, h('button', { class: 'btn small', text: 'Проверить', data: { act: 'players-check' }, onclick: run })),
+    out);
+}
+
 function notifications() {
-  return [group(
+  return [group(playersCheck()), group(
     toggleRow('settings.showSeconds', 'Секунды на часах', null),
     toggleRow('settings.showWeather', 'Погода в свёрнутом острове', null),
     toggleRow('settings.copyToast', 'Показывать «Скопировано»', 'Остров на секунду показывает, что попало в буфер обмена'),

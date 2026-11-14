@@ -22,6 +22,7 @@ const state = {
   pausedAt: 0,
   hasMedia: process.env.MOCK_NO_MEDIA !== '1',
   second: false, // a browser tab playing too
+  ytWindow: '', // the title of a browser window with YouTube, for a browser that tells Windows nothing
   active: null, // the program in front: { pid, exe, path, name, title }
   idleMs: 0,
   volume: { available: true, level: 0.62, muted: false },
@@ -53,7 +54,12 @@ function media(have, appId) {
     const now = Date.now();
     return { app: 'chrome.exe', ...browserTrack, status: 'Playing', position: 12, duration: 600, updated: now, now, key: 'chrome|lofi', canPrev: false, canNext: true, canSeek: true };
   }
-  if (!state.hasMedia) return null;
+  if (!state.hasMedia) {
+    const m = /^(.+?) - (YouTube)/.exec(state.ytWindow || '');
+    if (!m) return null;
+    const now = Date.now();
+    return { app: 'title:chrome.exe', title: m[1], artist: m[2], album: '', status: 'Unknown', position: 0, duration: 0, updated: now, now, key: 'title:chrome.exe|' + m[1], canPrev: true, canNext: true, canSeek: false, fromTitle: true };
+  }
   const t = tracks[state.track];
   const key = `mock|${t.title}|${t.artist}|${t.album}`;
   const now = Date.now();
@@ -77,7 +83,7 @@ function run(cmd, a) {
       const list = state.hasMedia ? [{ ...media('*'), current: true }] : [];
       if (state.second) list.push({ ...media('*', 'chrome.exe'), current: false });
       for (const s of list) delete s.thumb;
-      return { sessions: list };
+      return { sessions: list, youtubeWindows: state.ytWindow ? [{ exe: 'chrome.exe', title: state.ytWindow }] : [] };
     }
     case 'media.cmd': {
       if (!state.hasMedia) return false;
