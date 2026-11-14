@@ -154,6 +154,26 @@ async function main() {
   });
 
   // ------------------------------------------------------------------ home
+  // A pretend YouTube player page: a video element whose playing is pretended.
+  const VIDEO_PAGE = 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><title>Видео</title>
+<body style="margin:0;background:#024"><video id="v"></video>
+<script>
+  const v = document.getElementById('v');
+  const st = { paused: false, muted: true, time: 5 };
+  Object.defineProperty(v, 'paused', { get: () => st.paused });
+  Object.defineProperty(v, 'muted', { get: () => st.muted, set: (x) => { st.muted = x; } });
+  Object.defineProperty(v, 'duration', { get: () => 300 });
+  Object.defineProperty(v, 'ended', { get: () => false });
+  Object.defineProperty(v, 'currentTime', { get: () => st.time, set: (x) => { st.time = x; v.dispatchEvent(new Event('seeked')); } });
+  v.play = () => { st.paused = false; v.dispatchEvent(new Event('play')); return Promise.resolve(); };
+  v.pause = () => { st.paused = true; v.dispatchEvent(new Event('pause')); };
+  setInterval(() => { if (!st.paused) st.time += 0.25; }, 250);
+  Object.defineProperty(window, '__v', { get: () => ({ ...st }) });
+  // what a person does on the video with the mouse
+  window.__user = (what) => { if (window.__kaplya) { window.__kaplya.prog = 0; window.__kaplya.since = 0; } if (what === 'pause') v.pause(); else v.play(); };
+  window.__set = (t) => { st.time = t; };
+</script></body>`);
+
   await scenario('home: player, lyrics, volume, tools', withWeather, async (k) => {
     // music that was already playing at start is not announced
     await until(async () => (await k.page.locator('#pill-left img').count()) === 1, 'cover in the pill');
@@ -197,9 +217,9 @@ async function main() {
     // the heart: the track goes to the liked list, and stays after a restart
     await k.page.click('.player-like');
     assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'true');
-    // a program's own "like" cannot be pressed from outside: the island says so plainly
+    // the player's window has no "like" button to press: the island says so plainly
     await until(async () => /Лайк сохранён в Капле/.test(await text(k, '#banner').catch(() => '')), 'the banner explains where the like is');
-    assert.match(await text(k, '#banner'), /вкладке «Плеер»/);
+    assert.match(await text(k, '#banner'), /Не нашёл кнопку «Нравится» в окне MockPlayer/);
     assert.equal(await text(k, '.like-count'), '1');
     await k.page.click('.player-likes');
     await k.page.waitForSelector('.likes-list .like');
@@ -210,6 +230,14 @@ async function main() {
     await k.page.click('.player-like');
     await until(async () => (await k.page.locator('.likes-list .like').count()) === 0, 'unliked');
     await k.page.click('.stage-head button[title="Свернуть"]');
+    // the player's window has a "like" button: the heart presses it, the like is in the player itself
+    await k.helper('mock.set', { pageLike: true, pageLiked: false });
+    await k.page.click('.player-like');
+    await until(async () => (await k.helper('mock.state')).pageLiked === true, 'the like button in the player window pressed');
+    await until(async () => /Лайк поставлен в MockPlayer/.test(await text(k, '#banner').catch(() => '')), 'the banner says where the like went');
+    await k.page.click('.player-like');
+    await until(async () => (await k.helper('mock.state')).pageLiked === false, 'and taken off there');
+    assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'false');
 
     // a second player (a browser tab): it can be chosen
     await k.helper('mock.set', { second: true });
@@ -219,15 +247,53 @@ async function main() {
     assert.match(await text(k, '.player-artist'), /Lofi Girl · Google Chrome/);
     // the mini video: off by default; on, the same YouTube video stands in for the cover
     assert.equal(await k.page.locator('.player.has-video').count(), 0);
+    await k.page.evaluate((u) => { window.__videoTestUrl = u; }, VIDEO_PAGE);
     await k.main(() => globalThis.__kaplyaTest.store.set('settings.youtubeMini', true));
     await until(async () => (await k.page.locator('.player.has-video .player-video webview[data-video-id="jfKfPfyJRdk"]').count()) === 1, 'mini video found and shown');
     await k.page.click('.player-video');
     await until(async () => (await k.page.locator('.player.video-big').count()) === 1, 'video made bigger');
     const big = await k.page.locator('.player-video').boundingBox();
     assert.ok(big.width > 300 && Math.abs(big.width / big.height - 16 / 9) < 0.05, 'a big 16:9 video: ' + JSON.stringify(big));
+    const inVideo = (js) => k.page.evaluate((code) => document.querySelector('.player-video webview').executeJavaScript(code), js);
+    await until(async () => (await inVideo('document.title').catch(() => '')) === 'Видео', 'the video page to load', 15000);
+    // silent and in step with the browser
+    await until(async () => (await inVideo('window.__v')).muted === true && (await inVideo('window.__v')).paused === false, 'the copy plays, muted');
+    assert.equal(await k.page.locator('.video-bar button[data-act="video-own"]').count(), 1);
+    assert.match(await text(k, '.video-note'), /управляют видео в браузере/);
     await k.settle(300);
     await k.shot('home-video');
-    await k.page.click('.player-video');
+    // a pause made on the video itself reaches the browser
+    await sleep(3200);
+    await inVideo('window.__user("pause")');
+    await until(async () => (await k.helper('mock.state')).playing === false, 'the pause in the island reached the browser', 8000);
+    await inVideo('window.__user("play")');
+    await until(async () => (await k.helper('mock.state')).playing === true, 'and so did play', 8000);
+    // "Звук в острове": the browser falls silent, the island plays the video with sound
+    await k.page.click('.video-bar button[data-act="video-own"]');
+    await until(async () => (await k.helper('mock.state')).playing === false, 'the browser is paused');
+    await until(async () => (await inVideo('window.__v')).muted === false, 'the island video has sound');
+    await until(async () => /Капля · YouTube/.test(await text(k, '.player-artist')), 'the island is the player now', 8000);
+    assert.equal(await text(k, '.player-title'), 'Lo-fi beats to study to');
+    // the card's own buttons drive the island video
+    await k.page.click('.player-play');
+    await until(async () => (await inVideo('window.__v')).paused === true, 'pause from the card');
+    await k.page.click('.player-play');
+    await until(async () => (await inVideo('window.__v')).paused === false, 'play from the card');
+    // leaving the tab does not stop it
+    await k.open('text');
+    await sleep(1500);
+    await k.open('home');
+    assert.equal((await inVideo('window.__v')).paused, false, 'still playing after a visit to another tab');
+    assert.equal(await inVideo('document.title'), 'Видео', 'the same page');
+    // and back to the browser, from the same moment
+    await inVideo('window.__set(77)');
+    await sleep(1200);
+    await k.page.click('.video-bar button[data-act="video-back"]');
+    await until(async () => (await k.helper('mock.state')).playing === true, 'the browser plays again');
+    await until(async () => /Google Chrome/.test(await text(k, '.player-artist')), 'the browser is shown again', 8000);
+    assert.ok((await k.helper('mock.state')).calls.includes('media.cmd'));
+    await until(async () => (await inVideo('window.__v')).muted === true, 'the copy is silent again');
+    await k.page.click('.video-bar button[title="Свернуть видео"]');
     await until(async () => (await k.page.locator('.player.video-big').count()) === 0, 'video small again');
     await k.page.locator('.player-sources .chip', { hasText: 'MockPlayer' }).click();
     await until(async () => (await text(k, '.player-title')) === 'Тёплый берег', 'back to the program');

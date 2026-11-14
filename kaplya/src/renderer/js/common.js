@@ -28,6 +28,7 @@ const APP_NAMES = [
   [/yandex/i, 'Яндекс Браузер'],
   [/chrome/i, 'Google Chrome'],
   [/msedge|microsoftedge/i, 'Microsoft Edge'],
+  [/^browser(\.exe)?$|yandex.*browser|^yandex\./i, 'Яндекс Браузер'],
   [/firefox|308046B0AF4A39CB/i, 'Firefox'],
   [/opera/i, 'Opera'],
   [/brave/i, 'Brave'],
@@ -57,8 +58,9 @@ export function appLabel(id) {
   if (!s) return '';
   if (s.startsWith('title:')) return appLabel(s.slice(6)); // a browser known by its window title
   if (s.startsWith('kaplya:web')) {
-    const svc = MUSIC_SERVICES.find((x) => x.id === s.slice('kaplya:web:'.length));
-    return 'Капля · ' + (svc ? svc.name : 'Плеер');
+    const id = s.slice('kaplya:web:'.length);
+    const svc = MUSIC_SERVICES.find((x) => x.id === id);
+    return 'Капля · ' + (svc ? svc.name : id === 'youtube' ? 'YouTube' : 'Плеер');
   }
   for (const [re, name] of APP_NAMES) if (re.test(s)) return name;
   const tail = s.split(/[!\\/]/).pop().replace(/\.exe$/i, '');

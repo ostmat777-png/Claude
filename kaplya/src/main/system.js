@@ -27,6 +27,26 @@ class SystemWatch extends EventEmitter {
     this.mediaSeen = false; // becomes true after the first look at the player
     this.web = null; // what the music service inside the island is playing: { state, at, cover }
     this.isOwnApp = opts.isOwnApp || (() => false); // our own entry in Windows' list of players
+    this.page = null; // what the player's own window says: { key, position, duration, at, playing }
+  }
+
+  /**
+   * A browser that tells Windows nothing is known only by its window title. Its
+   * window still says where the video is (the seek slider): two looks apart also
+   * tell whether it plays.
+   */
+  setPage(key, read) {
+    if (!read || typeof read.position !== 'number' || !(read.duration > 0)) return;
+    const prev = this.page && this.page.key === key ? this.page : null;
+    const now = Date.now();
+    let playing = true;
+    if (prev) {
+      const moved = read.position - prev.position;
+      const passed = (now - prev.at) / 1000;
+      playing = passed < 1.5 ? prev.playing : Math.abs(moved) > 0.5;
+    }
+    this.page = { key, position: read.position, duration: read.duration, at: now, playing };
+    this.pollMedia();
   }
 
   /**
@@ -149,6 +169,10 @@ class SystemWatch extends EventEmitter {
   }
 
   applyMedia(raw) {
+    if (raw && raw.fromTitle && this.page && this.page.key === raw.key) {
+      const p = this.page;
+      raw = { ...raw, position: p.position, duration: p.duration, updated: p.at, now: Date.now(), status: p.playing ? 'Playing' : 'Paused' };
+    }
     const first = !this.mediaSeen;
     this.mediaSeen = true;
     if (!raw || (!raw.title && !raw.artist)) {
@@ -181,6 +205,7 @@ class SystemWatch extends EventEmitter {
       canNext: raw.canNext !== false,
       canSeek: Boolean(raw.canSeek),
       liked: typeof raw.liked === 'boolean' ? raw.liked : null, // known only for the island's own service
+      fromTitle: Boolean(raw.fromTitle),
     };
 
     let coverChanged = false;
@@ -263,7 +288,13 @@ class SystemWatch extends EventEmitter {
     return this.volume;
   }
 
-  async mediaCommand(action, position) {
+  /** @param {string} [to] a player by name; otherwise the one that is shown */
+  async mediaCommand(action, position, to) {
+    if (to) {
+      const ok = await this.helper.tryCall('media.cmd', { action, position, app: to }, false);
+      setTimeout(() => this.pollMedia(), 250);
+      return ok;
+    }
     if (this.media && String(this.media.app).startsWith('kaplya:web')) {
       // the island's own music service is driven from its page
       this.emit('webcmd', action, position);

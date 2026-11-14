@@ -85,6 +85,14 @@ function run(cmd, a) {
       for (const s of list) delete s.thumb;
       return { sessions: list, youtubeWindows: state.ytWindow ? [{ exe: 'chrome.exe', title: state.ytWindow }] : [] };
     }
+    case 'page.read':
+      return { found: Boolean(state.pageLike), liked: state.pageLike ? state.pageLiked : null, likeName: 'Нравится', position: state.pagePos === undefined ? null : state.pagePos, duration: state.pagePos === undefined ? null : 300, url: '' };
+    case 'page.like': {
+      if (!state.pageLike) return { found: false, pressed: false, liked: null };
+      if (typeof a.want === 'boolean' && a.want === Boolean(state.pageLiked)) return { found: true, pressed: false, liked: Boolean(state.pageLiked) };
+      state.pageLiked = !state.pageLiked;
+      return { found: true, pressed: true, liked: state.pageLiked, likeName: 'Нравится' };
+    }
     case 'media.cmd': {
       if (!state.hasMedia) return false;
       if (a.action === 'toggle' || a.action === 'play' || a.action === 'pause') {
@@ -128,7 +136,7 @@ function run(cmd, a) {
     case 'apps.list': return { apps: [{ name: 'Калькулятор', id: 'Mock.Calculator' }, { name: 'Параметры', id: 'Mock.Settings' }, { name: 'Блокнот', id: 'Mock.Notepad' }] };
     // test controls
     case 'mock.set': Object.assign(state, a); return true;
-    case 'mock.state': return { power: state.power, calls: state.calls, playing: state.playing, track: state.track, volume: state.volume, dark: state.dark, connected: state.connected, radios: state.radios };
+    case 'mock.state': return { power: state.power, calls: state.calls, playing: state.playing, pageLiked: Boolean(state.pageLiked), track: state.track, volume: state.volume, dark: state.dark, connected: state.connected, radios: state.radios };
     default: throw new Error('unknown command: ' + cmd);
   }
 }

@@ -22,12 +22,13 @@ body {
   box-shadow: var(--shadow), inset 0 0 0 1px var(--line);
   overflow: hidden;
   transition:
-    width 0.44s var(--spring),
-    height 0.44s var(--spring),
-    border-radius 0.3s ease,
-    transform 0.4s var(--spring),
-    opacity 0.25s ease;
+    width 0.52s var(--spring),
+    height 0.52s var(--spring),
+    border-radius 0.4s var(--ease),
+    transform 0.5s var(--ease),
+    opacity 0.3s ease;
   will-change: width, height;
+  contain: layout style;
 }
 
 /* A full-screen program is running: slide out of sight. */
@@ -46,9 +47,11 @@ body {
   left: 50%;
   transform: translateX(-50%);
   opacity: 0;
+  scale: 0.97;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.14s ease, visibility 0s linear 0.14s;
+  /* leaving: fades where it stands while the island changes shape around it */
+  transition: opacity 0.18s ease, scale 0.18s ease, visibility 0s linear 0.18s;
 }
 
 #island[data-mode="pill"] #pill,
@@ -56,9 +59,20 @@ body {
 #island[data-mode="open"] #panel,
 #island[data-mode="command"] #command {
   opacity: 1;
+  scale: 1;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.22s ease 0.1s, visibility 0s;
+  /* arriving: a moment later, once the island is most of the way there */
+  transition: opacity 0.34s var(--ease) 0.12s, scale 0.42s var(--ease) 0.1s, visibility 0s;
+}
+
+/* a tab coming into view */
+.view:not([hidden]) {
+  animation: view-in 0.34s var(--ease);
+}
+
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(8px); }
 }
 
 /* ------------------------------------------------------------------ pill */
@@ -317,7 +331,7 @@ body {
   height: 33px;
   border-radius: 10px;
   color: var(--faint);
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 #rail button:hover {
@@ -339,6 +353,11 @@ body {
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--accent);
+  animation: mark-in 0.3s var(--spring);
+}
+
+@keyframes mark-in {
+  from { transform: scaleY(0); opacity: 0; }
 }
 
 #rail .badge {
@@ -409,7 +428,7 @@ body {
   border-radius: 10px;
   background: var(--card-2);
   font-size: 12px;
-  animation: rise 0.25s var(--spring);
+  animation: rise 0.36s var(--ease);
 }
 
 #banner[hidden] {
@@ -430,7 +449,7 @@ body {
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px); }
 }
 
 /* cards used by every tab */

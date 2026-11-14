@@ -71,40 +71,108 @@ export function createPlayer(app, hooks) {
   let shown = false;
   let timer = 0;
   let sessionsTimer = 0;
+  let pageTimer = 0;
   let seeking = false;
   let stage = 'none'; // none | lyrics | likes
   let lyrics = { key: null, lines: [], plain: '' };
   let lineIndex = -2;
   let sessions = [];
 
-  // ---------------------------------------------------------------- the top row
-  // ---------------------------------------------------------------- a small copy of the YouTube video
-  // When a browser plays a YouTube video, the same video plays here, muted and in
-  // step, in place of the cover. A click makes it bigger, still inside the island.
+  // ---------------------------------------------------------------- the YouTube video, here
+  // When a browser plays a YouTube video, the same video is shown here in place of
+  // the cover: silent and in step with the browser. A click opens it big, still
+  // inside the island, with YouTube's own controls: a pause or a rewind made there
+  // is passed on to the browser. "Звук в острове" moves the video here entirely:
+  // the browser falls silent and the island plays it, with sound.
   const BROWSERS = /chrome|msedge|firefox|opera|yandex|browser|brave|vivaldi|308046B0AF4A39CB/i;
-  const video = { key: null, id: null, ids: [], view: null, timer: 0 };
+  const video = { key: null, id: null, ids: [], view: null, timer: 0, own: false, track: null, hold: 0, state: null };
   // YouTube shows embedded videos only to players that say where they are
   const EMBED_REFERRER = 'https://kaplya.github.io/';
-  const videoBox = h('div', { class: 'player-video', hidden: true, title: 'Сделать видео больше', onclick: () => setStage(stage === 'video' ? 'none' : 'video') });
+  const videoBox = h('div', { class: 'player-video', hidden: true, title: 'Открыть видео', onclick: () => stage !== 'video' && setStage('video') });
+  const isTitle = (m) => Boolean(m) && String(m.app).startsWith('title:');
+  const homeView = () => el.closest('.view');
+
+  // Run inside the video's page, once a second: keeps it in step with the browser,
+  // and notices what the person did there themselves.
+  const WATCH = (o) => `(() => {
+    const text = document.body ? document.body.innerText : '';
+    if (document.querySelector('.ytp-error') || /Error 15\\d|Video unavailable|isn.t available|недоступн|Ошибка/i.test(text)) return { broken: true };
+    const v = document.querySelector('video');
+    if (!v) return { loading: true };
+    const k = window.__kaplya || (window.__kaplya = { prog: 0, user: null, since: Date.now(), hooked: false });
+    if (!k.hooked) {
+      k.hooked = true;
+      for (const t of ['seeked', 'pause', 'play']) {
+        v.addEventListener(t, () => {
+          // not ours (we have just touched it), and not the page's own start
+          if (Date.now() - k.prog > 900 && Date.now() - k.since > 3000) k.user = { type: t, time: v.currentTime };
+        });
+      }
+    }
+    const o = ${JSON.stringify(o)};
+    const user = k.user;
+    k.user = null;
+    if (!o.own && !user) {
+      if (!v.muted) v.muted = true;
+      if (o.sync) {
+        if (Math.abs(v.currentTime - o.at) > 2.5) { k.prog = Date.now(); v.currentTime = o.at; }
+        if (o.playing && v.paused) { k.prog = Date.now(); v.play().catch(() => {}); }
+        if (!o.playing && !v.paused) { k.prog = Date.now(); v.pause(); }
+      }
+    }
+    return { user, time: v.currentTime, duration: isFinite(v.duration) ? v.duration : 0, paused: v.paused, muted: v.muted, ended: v.ended };
+  })()`;
+
+  // Something done to the video from outside its page (the island's buttons).
+  const ACT = (action, value) => `(() => {
+    const v = document.querySelector('video');
+    if (!v) return false;
+    const p = document.getElementById('movie_player');
+    const k = window.__kaplya || (window.__kaplya = { prog: 0, user: null, since: Date.now(), hooked: false });
+    k.prog = Date.now();
+    const act = ${JSON.stringify(action)};
+    if (act === 'sound') {
+      if (p && p.unMute) { p.unMute(); if (p.setVolume) p.setVolume(100); }
+      v.muted = false;
+      v.volume = 1;
+      v.play().catch(() => {});
+    } else if (act === 'silence') {
+      v.pause();
+      if (p && p.mute) p.mute();
+      v.muted = true;
+    } else if (act === 'pause') v.pause();
+    else if (act === 'play') v.play().catch(() => {});
+    else if (act === 'toggle') { if (v.paused) v.play().catch(() => {}); else v.pause(); }
+    else if (act === 'seek') v.currentTime = ${Number(value) || 0};
+    return true;
+  })()`;
 
   function wantVideo(m) {
     return Boolean(app.settings.youtubeMini && m && BROWSERS.test(m.app || '') && !String(m.app).startsWith('kaplya:'));
   }
 
   function embedUrl(id, at) {
-    return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&modestbranding=1&origin=${encodeURIComponent(EMBED_REFERRER.slice(0, -1))}&start=${Math.max(0, Math.floor(at))}`;
+    return `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&controls=1&fs=0&playsinline=1&rel=0&iv_load_policy=3&origin=${encodeURIComponent(EMBED_REFERRER.slice(0, -1))}&start=${Math.max(0, Math.floor(at))}`;
   }
 
   function dropVideo() {
+    if (video.own) releaseOwn();
     clearInterval(video.timer);
     if (video.view) video.view.remove();
-    Object.assign(video, { key: null, id: null, ids: [], view: null, timer: 0 });
+    Object.assign(video, { key: null, id: null, ids: [], view: null, timer: 0, own: false, track: null, hold: 0, state: null });
     videoBox.hidden = true;
     el.classList.remove('has-video');
     if (stage === 'video') setStage('none');
   }
 
   async function paintVideo(m) {
+    if (video.own) {
+      // the island plays it itself now; only switching the setting off ends that
+      if (!app.settings.youtubeMini) dropVideo();
+      return;
+    }
+    // (just handed back to the browser: Windows needs a moment to show it again)
+    if (Date.now() < video.hold) return;
     if (!wantVideo(m)) {
       if (video.key) dropVideo();
       return;
@@ -112,7 +180,7 @@ export function createPlayer(app, hooks) {
     if (video.key === m.key) return;
     dropVideo();
     video.key = m.key;
-    const ids = await api.invoke('youtube:find', m.title, m.artist).catch(() => []);
+    const ids = await api.invoke('youtube:find', m.title, isTitle(m) ? '' : m.artist).catch(() => []);
     if (!Array.isArray(ids) || !ids.length || video.key !== m.key) return;
     video.ids = ids.slice();
     showVideo(m, video.ids.shift());
@@ -121,46 +189,136 @@ export function createPlayer(app, hooks) {
   function showVideo(m, id) {
     if (video.view) video.view.remove();
     video.id = id;
+    video.state = null;
     const view = document.createElement('webview');
     view.setAttribute('partition', 'persist:web');
     view.setAttribute('httpreferrer', EMBED_REFERRER);
-    view.setAttribute('src', app.test ? 'about:blank' : embedUrl(id, position(m)));
+    view.setAttribute('webpreferences', 'autoplayPolicy=no-user-gesture-required');
+    view.setAttribute('src', app.test ? (window.__videoTestUrl || 'about:blank') : embedUrl(id, m ? position(m) : 0));
     view.dataset.videoId = id;
     video.view = view;
     videoBox.append(view);
     videoBox.hidden = false;
     el.classList.add('has-video');
-    // keep it in step with the browser: the same moment, playing or paused
     clearInterval(video.timer);
-    video.timer = setInterval(() => syncVideo(), 2000);
+    video.timer = setInterval(() => tickVideo(), 1000);
     hooks.resized();
   }
 
-  async function syncVideo() {
+  const act = (action, value) => (video.view ? video.view.executeJavaScript(ACT(action, value), true).catch(() => false) : Promise.resolve(false));
+
+  async function tickVideo() {
+    const view = video.view;
+    if (!view) return;
     const m = app.sys.media;
-    if (!video.view || !m || m.key !== video.key || app.test) return;
-    const at = position(m);
+    const own = video.own;
+    // in step with the browser, when the browser says where it is
+    const sync = !own && Boolean(m) && m.key === video.key && (m.duration > 0 || !isTitle(m)) && Date.now() > video.hold;
+    let r;
     try {
-      const broken = await video.view.executeJavaScript(`(() => {
-        const text = document.body ? document.body.innerText : '';
-        if (document.querySelector('.ytp-error') || /Error 15\\d|Video unavailable|isn.t available|недоступн|Ошибка/i.test(text)) return true;
-        const v = document.querySelector('video');
-        if (!v) return false;
-        v.muted = true;
-        if (Math.abs(v.currentTime - ${at}) > 2.5) v.currentTime = ${at};
-        if (${m.playing} && v.paused) v.play().catch(() => {});
-        if (${!m.playing} && !v.paused) v.pause();
-        return false;
-      })()`);
-      // the owner does not allow the video to be shown elsewhere: the next match, or back to the cover
-      if (broken) {
-        if (video.ids.length) showVideo(m, video.ids.shift());
-        else dropVideo();
-      }
+      r = await view.executeJavaScript(WATCH({ own, sync, at: sync ? position(m) : 0, playing: sync ? m.playing : false }));
     } catch {
-      // still loading
+      return; // still loading
+    }
+    if (view !== video.view || !r || r.loading) return;
+    if (r.broken) {
+      // the owner does not allow the video to be shown elsewhere: the next match, or back to the cover
+      if (video.ids.length) showVideo(m, video.ids.shift());
+      else {
+        if (own) app.toast({ type: 'error', title: 'Это видео нельзя показать вне YouTube', text: 'Так решил его автор' });
+        dropVideo();
+      }
+      return;
+    }
+    video.state = r;
+    if (own) {
+      reportOwn();
+      return;
+    }
+    if (!r.user || !m || m.key !== video.key) return;
+    // Done by hand in the island's video: the browser follows where it can.
+    video.hold = Date.now() + 2500;
+    if (r.user.type === 'seeked') {
+      if (m.canSeek && !isTitle(m)) api.invoke('media:cmd', 'seek', r.user.time);
+      else takeOver('Этот браузер нельзя перемотать снаружи, поэтому видео теперь играет в острове');
+    } else if (isTitle(m)) {
+      api.invoke('media:cmd', 'toggle');
+    } else {
+      api.invoke('media:cmd', r.user.type === 'pause' ? 'pause' : 'play');
     }
   }
+
+  function reportOwn() {
+    const r = video.state;
+    if (!video.own || !r || !video.track) return;
+    api.send('webmedia:state', {
+      service: 'youtube',
+      title: video.track.title,
+      artist: video.track.artist,
+      album: '',
+      art: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg`,
+      playing: !r.paused,
+      position: r.time,
+      duration: r.duration,
+    });
+  }
+
+  /** The video moves here: the browser falls silent, the island plays it with sound. */
+  async function takeOver(why) {
+    const m = app.sys.media;
+    if (!video.view || video.own || !m) return;
+    video.track = { title: m.title, artist: isTitle(m) ? 'YouTube' : m.artist, browser: m.app, fromTitle: isTitle(m) };
+    video.own = true;
+    app.videoOwn = true;
+    homeView()?.classList.add('keep-alive');
+    if (isTitle(m)) {
+      if (m.playing || !m.duration) await api.invoke('media:cmd', 'toggle');
+    } else if (m.playing) {
+      await api.invoke('media:cmd', 'pause');
+    }
+    await act('sound');
+    await api.invoke('media:follow', 'kaplya:web:youtube');
+    await tickVideo();
+    paintStage();
+    if (why) app.toast({ type: 'info', icon: 'monitor-play', title: 'Видео играет в острове', text: why, hold: 7000 });
+  }
+
+  function releaseOwn() {
+    video.own = false;
+    app.videoOwn = false;
+    homeView()?.classList.remove('keep-alive');
+    api.send('webmedia:state', null);
+    api.invoke('media:follow', '');
+  }
+
+  /** Back to the browser, from the moment the island reached. */
+  async function giveBack() {
+    if (!video.own) return;
+    const t = video.track;
+    const at = video.state ? video.state.time : 0;
+    video.hold = Date.now() + 3500;
+    await act('silence');
+    releaseOwn();
+    // the browser is the player again
+    if (!t.fromTitle) await api.invoke('media:follow', t.browser);
+    video.hold = Date.now() + 3500;
+    setTimeout(() => paintVideo(app.sys.media), 3700);
+    if (t.fromTitle) {
+      await api.invoke('media:cmd', 'toggle', 0, t.browser);
+    } else {
+      await api.invoke('media:cmd', 'seek', at, t.browser);
+      await api.invoke('media:cmd', 'play', 0, t.browser);
+    }
+    paintStage();
+  }
+
+  // the island's buttons, while the island plays the video itself
+  api.on('webmedia:cmd', async (action, pos) => {
+    if (!video.own) return;
+    if (action === 'next' || action === 'prev') return;
+    await act(action, pos);
+    tickVideo();
+  });
 
   const cover = h('img', { class: 'player-cover', alt: '' });
   const coverBlank = h('div', { class: 'player-cover blank' }, icon('music', 26));
@@ -171,7 +329,27 @@ export function createPlayer(app, hooks) {
   const timeNow = h('span', { text: '0:00' });
   const timeAll = h('span', { text: '' });
   const btnPrev = h('button', { class: 'ghost', title: 'Предыдущий', onclick: () => api.invoke('media:cmd', 'prev') }, icon('skip-back', 17));
-  const btnPlay = h('button', { class: 'player-play', title: 'Пауза / играть', onclick: () => api.invoke('media:cmd', 'toggle') });
+  // The button answers at once; the player itself confirms a moment later.
+  let playShown = null;
+  let playHold = 0;
+  function paintPlay(playing) {
+    if (playShown === playing) return;
+    playShown = playing;
+    clear(btnPlay, icon(playing ? 'pause' : 'play', 17, 2.4));
+  }
+  const btnPlay = h('button', {
+    class: 'player-play',
+    title: 'Пауза / играть',
+    onclick: () => {
+      const m = app.sys.media;
+      // (a browser known only by its window title does not say whether it plays)
+      if (m && !String(m.app).startsWith('title:')) {
+        playHold = Date.now() + 1500;
+        paintPlay(!playShown);
+      }
+      api.invoke('media:cmd', 'toggle');
+    },
+  });
   const btnNext = h('button', { class: 'ghost', title: 'Следующий', onclick: () => api.invoke('media:cmd', 'next') }, icon('skip-forward', 17));
   const btnLike = h('button', { class: 'ghost player-like', onclick: () => toggleLike() }, icon('heart', 16));
   const likeCount = h('span', { class: 'like-count' });
@@ -245,7 +423,6 @@ export function createPlayer(app, hooks) {
     }
     return m && typeof m.liked === 'boolean' ? m.liked : isLiked(m);
   };
-  let likeExplained = false;
 
   /** Keeps Kaplya's own list in step: `want` true adds the track, false takes it away. */
   function rememberLike(m, want) {
@@ -254,15 +431,18 @@ export function createPlayer(app, hooks) {
     app.set('likes', want ? [{ key, title: m.title, artist: m.artist, album: m.album, app: m.app, at: Date.now() }, ...list].slice(0, 500) : list);
   }
 
+  let likeExplained = false;
   async function toggleLike() {
     const m = app.sys.media;
     if (!m) return;
     const want = !shownLiked(m);
+    const name = appLabel(m.app) || 'плеере';
     likePending = { key: likeKey(m), want, until: Date.now() + 2500 };
     rememberLike(m, want);
     paintLike(want);
     if (stage === 'likes') paintStage();
-    if (String(m.app).startsWith('kaplya:web') && app.musicLike) {
+    const web = String(m.app).startsWith('kaplya:web');
+    if (web && m.app !== 'kaplya:web:youtube' && app.musicLike) {
       // music inside the island: press the service's own "like", into your account
       const r = await app.musicLike();
       if (r && r.how !== 'none') {
@@ -272,17 +452,30 @@ export function createPlayer(app, hooks) {
       }
       return;
     }
-    if (want && !likeExplained) {
-      // A program or a browser: Windows gives other programs no "like" command.
+    if (web || !app.sys.helper) return;
+    // A program or a browser tab: Windows has no "like" command, so the island
+    // presses the "like" button in the player's own window.
+    const r = await api.invoke('media:like', m.app, want).catch(() => null);
+    if (app.sys.media && likeKey(app.sys.media) !== likeKey(m)) return;
+    if (r && r.found) {
+      if (typeof r.liked === 'boolean' && r.liked !== want) rememberLike(m, r.liked);
+      app.toast({
+        type: 'info',
+        icon: 'heart',
+        title: r.pressed ? (want ? `Лайк поставлен в ${name}` : `Лайк снят в ${name}`) : `В ${name} уже так и стоит`,
+        text: m.title,
+      });
+    } else if (want && !likeExplained) {
       likeExplained = true;
       app.toast({
         type: 'info',
         icon: 'heart',
         title: 'Лайк сохранён в Капле',
-        text: `В ${appLabel(m.app) || 'приложении'} его не поставить: Windows не даёт программам такой команды. Включите музыку во вкладке «Плеер», и лайк будет ставиться в самом сервисе.`,
+        text: `Не нашёл кнопку «Нравится» в окне ${name}. Она находится, когда окно плеера не свёрнуто и в нём открыт этот трек (в браузере — его вкладка).`,
         hold: 9000,
       });
     }
+    paintLike();
   }
 
   function paintLike(override) {
@@ -298,7 +491,7 @@ export function createPlayer(app, hooks) {
     if (next === 'lyrics' && !lyrics.lines.length && !lyrics.plain) next = 'none';
     if (next === 'video' && !video.view) next = 'none';
     el.classList.toggle('video-big', next === 'video');
-    videoBox.title = next === 'video' ? 'Сделать видео меньше' : 'Сделать видео больше';
+    videoBox.title = next === 'video' ? '' : 'Открыть видео';
     stage = next;
     lineIndex = -2;
     paintStage();
@@ -318,9 +511,26 @@ export function createPlayer(app, hooks) {
     teaser.hidden = stage !== 'none' || !(lyrics.lines.length || lyrics.plain) || lyrics.key !== (app.sys.media && app.sys.media.key);
     btnLikes.classList.toggle('on', stage === 'likes');
     el.classList.toggle('open', stage !== 'none');
-    if (stage === 'none' || stage === 'video') {
+    if (stage === 'none') {
       clear(stageEl);
       stageEl.hidden = true;
+      return;
+    }
+    if (stage === 'video') {
+      const m = app.sys.media;
+      const canFollow = m && !isTitle(m) && m.canSeek;
+      clear(stageEl, h('div', { class: 'video-bar' },
+        video.own
+          ? h('button', { class: 'btn small', data: { act: 'video-back' }, title: 'Продолжить в браузере с этого же места', onclick: () => giveBack() }, icon('monitor', 13), 'Вернуть в браузер')
+          : h('button', { class: 'btn small primary', data: { act: 'video-own' }, title: 'Браузер замолчит, видео со звуком пойдёт здесь', onclick: () => takeOver() }, icon('volume-2', 13), 'Звук в острове'),
+        h('span', {
+          class: 'faint video-note ellipsis',
+          text: video.own ? 'Видео играет в острове: пауза, перемотка и звук прямо на нём'
+            : canFollow ? 'Пауза и перемотка здесь управляют видео в браузере'
+              : 'Чтобы перематывать и слушать здесь, нажмите «Звук в острове»',
+        }),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'ghost', title: 'Свернуть видео', onclick: () => setStage('none') }, icon('chevron-up', 15))));
       return;
     }
     if (stage === 'lyrics') {
@@ -353,7 +563,7 @@ export function createPlayer(app, hooks) {
     if (!list.length) {
       box.append(h('div', { class: 'likes-empty faint' },
         'Нажмите на сердечко у трека, и он появится здесь. ',
-        'Лайк хранится в Капле: поставить его в самом сервисе Windows программам не позволяет.'));
+        'Капля также нажимает «Нравится» в самом плеере, когда его окно открыто.'));
     }
     for (const item of list) {
       box.append(h('div', { class: 'like' },
@@ -482,7 +692,10 @@ export function createPlayer(app, hooks) {
     if (m.cover && cover.src !== m.cover) cover.src = m.cover;
     glow.style.backgroundImage = m.cover ? `url("${m.cover}")` : 'none';
     paintTint(m.cover || '');
-    clear(btnPlay, icon(m.playing ? 'pause' : 'play', 17, 2.4));
+    if (Date.now() > playHold || m.playing === playShown) {
+      playHold = 0;
+      paintPlay(m.playing);
+    }
     btnPrev.disabled = !m.canPrev;
     btnNext.disabled = !m.canNext;
     bar.disabled = !m.canSeek || !m.duration;
@@ -515,13 +728,22 @@ export function createPlayer(app, hooks) {
       clearInterval(timer);
       timer = setInterval(paintProgress, 400);
       clearInterval(sessionsTimer);
-      sessionsTimer = setInterval(loadSessions, 4000);
+      sessionsTimer = setInterval(loadSessions, 5000);
       loadSessions();
+      // A browser known only by its window title: its window says where the video is.
+      clearInterval(pageTimer);
+      const readPage = () => {
+        const m = app.sys.media;
+        if (m && isTitle(m) && !video.own) api.invoke('media:page', m.app, m.key).catch(() => {});
+      };
+      pageTimer = setInterval(readPage, 4000);
+      readPage();
     },
     hide() {
       shown = false;
       clearInterval(timer);
       clearInterval(sessionsTimer);
+      clearInterval(pageTimer);
     },
   };
 }

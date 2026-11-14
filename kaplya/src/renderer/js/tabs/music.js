@@ -158,6 +158,7 @@ export default {
       if (!view) return;
       try {
         const state = await view.executeJavaScript(READ);
+        if (app.videoOwn) return; // the island's own YouTube video is the player now
         api.send('webmedia:state', { ...state, service: cur.id });
       } catch {
         // the page is still loading
@@ -180,7 +181,7 @@ export default {
     api.on('webmedia:cmd', async (action, position) => {
       const cur = current();
       const view = cur && pages.get(cur.id);
-      if (!view) return;
+      if (!view || app.videoOwn) return;
       try {
         await view.executeJavaScript(COMMAND(action, position));
       } catch {}

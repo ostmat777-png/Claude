@@ -878,7 +878,15 @@ function registerIpc() {
   });
 
   // --- music and volume
-  handle('media:cmd', (action, position) => system.mediaCommand(String(action), Number(position) || 0));
+  handle('media:cmd', (action, position, to) => system.mediaCommand(String(action), Number(position) || 0, to ? String(to) : ''));
+  // The player's own window: its "like" button, and where a video is. (Windows has
+  // no "like" command for players; the button in the window is pressed instead.)
+  handle('media:like', (app, want) => helper.tryCall('page.like', { app: String(app || ''), want: typeof want === 'boolean' ? want : null }, null, 25000));
+  handle('media:page', async (app, key) => {
+    const r = await helper.tryCall('page.read', { app: String(app || '') }, null, 25000);
+    if (r && key) system.setPage(String(key), r);
+    return r;
+  });
   handle('volume:set', (change) => system.setVolume(change || {}).catch(() => system.volume));
   handle('lyrics:get', (track) => (store.get('settings.lyrics') === false ? null : netApi.lyrics(track || {})));
   handle('media:sessions', async () => {

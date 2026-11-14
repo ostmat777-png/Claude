@@ -18,7 +18,10 @@
   --shadow: 0 10px 34px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.3);
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
   --mono: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
-  --spring: cubic-bezier(0.22, 1.16, 0.36, 1);
+  /* Motion. Everything eases out softly; only the island's own shape has a hint of
+     a spring. (A strong overshoot looked like a jerk on a big panel.) */
+  --spring: cubic-bezier(0.3, 1.06, 0.36, 1);
+  --ease: cubic-bezier(0.22, 0.8, 0.26, 1);
   color-scheme: dark;
 }
 
@@ -121,7 +124,7 @@ textarea:focus-visible {
   height: 26px;
   border-radius: 8px;
   color: var(--muted);
-  transition: background 0.12s, color 0.12s;
+  transition: background 0.18s ease, color 0.18s ease;
 }
 
 .ghost:hover {
@@ -145,7 +148,7 @@ textarea:focus-visible {
   background: var(--card-2);
   color: var(--text);
   white-space: nowrap;
-  transition: background 0.12s, transform 0.08s;
+  transition: background 0.18s ease, transform 0.16s var(--ease);
 }
 
 .btn:hover {

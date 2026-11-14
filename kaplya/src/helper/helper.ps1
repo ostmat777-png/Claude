@@ -245,12 +245,17 @@ namespace Kaplya {
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
     // "pid|process|title" of every visible window that has a title.
-    public static string[] WindowTitles() {
+    public static string[] WindowTitles() { return WindowTitles(null); }
+
+    // The same, only for titles containing `must`: finding the process of every
+    // window each second is work for nothing.
+    public static string[] WindowTitles(string must) {
       var list = new System.Collections.Generic.List<string>();
       EnumWindows(delegate (IntPtr h, IntPtr l) {
         if (!IsWindowVisible(h)) return true;
         var sb = new StringBuilder(512);
         if (GetWindowText(h, sb, sb.Capacity) <= 0) return true;
+        if (must != null && sb.ToString().IndexOf(must, StringComparison.Ordinal) < 0) return true;
         uint pid;
         GetWindowThreadProcessId(h, out pid);
         string name = "";
@@ -350,7 +355,7 @@ $script:BrowserExe = @('chrome', 'msedge', 'browser', 'yandex', 'firefox', 'oper
 function Get-YouTubeWindows {
     Initialize-Native
     $list = @()
-    foreach ($line in @([Kaplya.Win]::WindowTitles())) {
+    foreach ($line in @([Kaplya.Win]::WindowTitles('YouTube'))) {
         $parts = ([string]$line).Split('|', 3)
         if ($parts.Count -lt 3) { continue }
         $exe = $parts[1].ToLower()

@@ -152,6 +152,34 @@
   display: inline-flex;
   width: 100%;
   height: 100%;
+  pointer-events: none; /* small: a click opens it */
+}
+
+/* opened: the video is YouTube's own player, to be used as such */
+.player.video-big .player-video webview {
+  pointer-events: auto;
+}
+
+.video-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.video-note {
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* While the island plays a video itself, leaving the home tab must not stop it:
+   the tab is moved out of sight instead of being taken out of the layout. */
+.view-home.keep-alive[hidden] {
+  display: block;
+  position: fixed;
+  left: -12000px;
+  top: 0;
+  width: 660px;
+  visibility: hidden;
   pointer-events: none;
 }
 
@@ -164,7 +192,7 @@
   width: 100%;
   height: auto;
   aspect-ratio: 16 / 9;
-  cursor: zoom-out;
+  cursor: default;
 }
 
 .player-cover.blank {
@@ -208,11 +236,54 @@
   border-radius: 50%;
   background: var(--text);
   color: var(--bg);
-  transition: transform 0.1s;
+  transition: transform 0.2s var(--ease), background 0.2s ease;
+}
+
+.player-play:hover {
+  transform: scale(1.06);
 }
 
 .player-play:active {
-  transform: scale(0.92);
+  transform: scale(0.94);
+}
+
+/* play and pause swap with a small turn instead of a blink */
+.player-play .icon {
+  animation: icon-in 0.26s var(--ease);
+}
+
+@keyframes icon-in {
+  from { opacity: 0; transform: scale(0.6) rotate(-30deg); }
+}
+
+/* the cover and the title of a new track come in softly */
+.player-cover,
+.player-title,
+.player-artist {
+  transition: opacity 0.3s ease;
+}
+
+.player.swap .player-cover,
+.player.swap .player-title,
+.player.swap .player-artist {
+  opacity: 0;
+}
+
+.player-glow {
+  transition: opacity 0.6s ease;
+}
+
+.player-like .icon {
+  transition: transform 0.3s var(--spring), fill 0.2s ease, color 0.2s ease;
+}
+
+.player-like.on .icon {
+  animation: heart 0.45s var(--spring);
+}
+
+@keyframes heart {
+  0% { transform: scale(0.6); }
+  55% { transform: scale(1.25); }
 }
 
 .player-progress {
@@ -302,7 +373,7 @@
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
-  animation: rise 0.25s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .stage-head {
@@ -584,7 +655,7 @@
   margin-top: 6px;
   padding: 8px 2px 2px;
   border-top: 1px solid var(--line);
-  animation: rise 0.2s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .apps-add[hidden] {
@@ -984,7 +1055,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  animation: rise 0.25s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .tr-panel[hidden] {
@@ -1041,7 +1112,7 @@
   border-radius: 12px;
   background: var(--card-2);
   box-shadow: inset 0 0 0 1px var(--line-2);
-  animation: rise 0.18s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .picker-list[hidden] {
@@ -1963,7 +2034,7 @@ button.wtile:hover .label .icon {
   gap: 8px;
   min-height: 192px;
   padding: 8px 12px 10px;
-  animation: rise 0.25s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .wdetail-head {
@@ -2390,7 +2461,7 @@ button.wtile:hover .label .icon {
   padding: 8px 10px;
   border-radius: 10px;
   background: var(--card-2);
-  animation: rise 0.22s var(--spring);
+  animation: rise 0.34s var(--ease);
 }
 
 .act-week {
