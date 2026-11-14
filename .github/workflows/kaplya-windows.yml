@@ -90,6 +90,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # Just the kaplya folder, for those who start it with run.bat: the repository's
+      # own "Download ZIP" would bring everything else in it too.
+      - name: Only the kaplya folder
+        shell: bash
+        working-directory: .
+        run: |
+          mkdir -p "$RUNNER_TEMP/kaplya-folder"
+          git archive --format=tar HEAD kaplya | tar -x -C "$RUNNER_TEMP/kaplya-folder"
+
+      - name: Keep the kaplya folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kaplya-folder
+          path: ${{ runner.temp }}/kaplya-folder
+          retention-days: 90
+
       - name: Keep the installer
         uses: actions/upload-artifact@v4
         with:
