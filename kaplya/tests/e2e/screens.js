@@ -58,8 +58,14 @@ const closing = (p) => p.catch(() => {});
 
     // tabs
     await k.open('home');
-    await sleep(600);
+    await k.helper('media.cmd', { action: 'seek', position: 40 });
+    await sleep(1500);
+    await k.page.click('.player-lyrics');
+    await k.page.waitForSelector('.lyrics-full .lline.now');
+    await k.page.click('.player-like');
+    await sleep(900);
     jpg(await k.shot('doc-home'), 'home', '940x450+0+0');
+    await k.page.click('.stage-head button[title="Свернуть"]');
     await k.open('weather');
     jpg(await k.shot('doc-weather'), 'weather', '940x430+0+0');
     await k.open('control');

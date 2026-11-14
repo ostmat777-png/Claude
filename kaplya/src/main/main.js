@@ -1380,7 +1380,7 @@ async function main() {
   clips = new ClipWatch(
     {
       io: clipio,
-      seq: () => (helper.supported ? helper.call('clip.info', {}, 3000) : Promise.resolve(null)),
+      seq: () => (helper.supported ? helper.call('clip.info', {}, 4000) : Promise.resolve(null)),
       describeImage: (png) => {
         const img = nativeImage.createFromBuffer(png);
         if (img.isEmpty()) return null;

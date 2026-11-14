@@ -78,8 +78,14 @@ class ClipWatch extends EventEmitter {
       let info = null;
       try {
         info = await this.seq();
+        this.seqFails = 0;
       } catch {
-        info = null;
+        // The helper is busy with something slow (a cover, a list of networks). Its
+        // answer also says whether a password manager marked the content as secret,
+        // so wait for it a little rather than read the clipboard without that check.
+        this.seqFails = (this.seqFails || 0) + 1;
+        if (this.seqFails < 6) return;
+        info = null; // it does not answer at all: carry on without it
       }
       const seq = info && typeof info === 'object' ? info.seq : info;
       const secret = info && typeof info === 'object' ? Boolean(info.secret) : null;
