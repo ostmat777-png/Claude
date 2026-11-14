@@ -576,15 +576,15 @@ function Get-PlayerPids($app) {
         $exe = $parts[1].ToLower()
         $n = $exe -replace '[^a-z0-9]', ''
         if ($want -and $n.Length -ge 3 -and ($want.Contains($n) -or $n.Contains($want))) { $exact += $id }
-        elseif (($script:BrowserExe -contains $exe) -or ($exe -match $script:PlayerExe) -or ($parts[2] -match 'YouTube|Музыка|Music|Spotify')) { $rest += $id }
+        elseif (($script:BrowserExe -contains $exe) -or ($exe -match $script:PlayerExe) -or ($parts[2] -match 'YouTube|\u041c\u0443\u0437\u044b\u043a\u0430|Music|Spotify')) { $rest += $id }
     }
     if ($exact.Count -gt 0) { return @($exact | Select-Object -Unique) }
     return @($rest | Select-Object -Unique)
 }
 
-$script:LikeGood = 'нравится|понрави|like|лайк|избранн|любим|медиатек|save to your'
-$script:LikeBad = '(^|[^а-яёa-z])не (нравится|понрави)|dislike|комментар|comment|ответ|reply|рекоменд|playlist|плейлист'
-$script:SeekGood = 'перемот|seek|progress|прогресс|воспроизведения|playback|timeline|хронометраж'
+$script:LikeGood = '\u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f|\u043f\u043e\u043d\u0440\u0430\u0432\u0438|like|\u043b\u0430\u0439\u043a|\u0438\u0437\u0431\u0440\u0430\u043d\u043d|\u043b\u044e\u0431\u0438\u043c|\u043c\u0435\u0434\u0438\u0430\u0442\u0435\u043a|save to your'
+$script:LikeBad = '(^|[^\u0430-\u044f\u0451a-z])\u043d\u0435 (\u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f|\u043f\u043e\u043d\u0440\u0430\u0432\u0438)|dislike|\u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440|comment|\u043e\u0442\u0432\u0435\u0442|reply|\u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434|playlist|\u043f\u043b\u0435\u0439\u043b\u0438\u0441\u0442'
+$script:SeekGood = '\u043f\u0435\u0440\u0435\u043c\u043e\u0442|seek|progress|\u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441|\u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0434\u0435\u043d\u0438\u044f|playback|timeline|\u0445\u0440\u043e\u043d\u043e\u043c\u0435\u0442\u0440\u0430\u0436'
 
 # What the player's window shows: its "like" button, its seek slider, the address
 # of the page. Looks through the windows of the player's processes.
@@ -639,7 +639,7 @@ function Get-PlayerPage($app) {
                 if ($r.IsEmpty -or $r.Width -le 0) { continue }
                 # the video's or the player bar's own button: the one about "the video", else the lowest
                 $score = [double]$r.Bottom
-                if ($name -match 'видео|video') { $score += 100000 }
+                if ($name -match '\u0432\u0438\u0434\u0435\u043e|video') { $score += 100000 }
                 if ($score -gt $bestScore) { $bestScore = $score; $best = $e }
             }
         }
