@@ -400,7 +400,9 @@ body {
 
 #banner {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  line-height: 1.4;
   gap: 8px;
   margin-top: 8px;
   padding: 7px 10px;
@@ -416,6 +418,11 @@ body {
 
 #banner .icon {
   color: var(--accent);
+}
+
+#banner .banner-long {
+  flex: 1 1 100%;
+  padding-left: 23px;
 }
 
 #banner.error .icon {

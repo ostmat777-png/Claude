@@ -511,10 +511,11 @@ function showBanner(t) {
   clear(el.banner,
     icon(t.icon || TOAST_ICONS[t.type] || 'info', 15),
     h('b', { text: t.title || '' }),
-    t.text ? h('span', { class: 'muted ellipsis', text: t.text }) : null);
+    // a long explanation wraps onto its own lines instead of being cut off
+    t.text ? h('span', { class: t.text.length > 70 ? 'muted banner-long' : 'muted ellipsis', text: t.text }) : null);
   el.banner.hidden = false;
   layout();
-  bannerTimer = setTimeout(hideBanner, t.sticky ? 12000 : 3800);
+  bannerTimer = setTimeout(hideBanner, t.hold || (t.sticky ? 12000 : 3800));
 }
 
 function hideBanner() {

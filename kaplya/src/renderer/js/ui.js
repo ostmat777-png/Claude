@@ -182,3 +182,93 @@ export function chime(times = 2) {
     // no sound device: the toast is enough
   }
 }
+
+/**
+ * A choice from a list, drawn inside the page. (The system's own drop-down list
+ * opens as a separate window, outside the island: the island would take the
+ * cursor going there for the cursor leaving, and fold away.)
+ * @param {object} o
+ * @param {[string, string][]} o.options  [value, label]
+ * @param {string} o.value
+ * @param {(value: string) => void} o.onChange
+ * @param {string} [o.label]  for screen readers and tests
+ * @param {() => void} [o.onToggle]  the list opened or closed (the page changed size)
+ */
+export function picker({ options, value, onChange, label = '', onToggle = () => {} }) {
+  let current = value;
+  const text = h('span', { class: 'ellipsis' });
+  const button = h('button', { class: 'picker-btn field', 'aria-label': label, 'aria-haspopup': 'listbox', 'aria-expanded': 'false' }, text, icon('chevron-down', 13));
+  const list = h('div', { class: 'picker-list', role: 'listbox', hidden: true, 'aria-label': label });
+  const el = h('div', { class: 'picker' }, button);
+  const nameOf = (v) => (options.find(([x]) => x === v) || [v, v])[1];
+
+  function paint() {
+    text.textContent = nameOf(current);
+    clear(list, options.map(([v, name]) => h('button', {
+      class: 'picker-item' + (v === current ? ' on' : ''),
+      role: 'option',
+      'aria-selected': String(v === current),
+      data: { value: v },
+      text: name,
+      onclick: (e) => {
+        e.stopPropagation();
+        close();
+        if (v !== current) {
+          current = v;
+          paint();
+          onChange(v);
+        }
+      },
+    })));
+  }
+
+  function open() {
+    list.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    onToggle(true);
+    const on = list.querySelector('.on');
+    if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+
+  function close() {
+    if (list.hidden) return;
+    list.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    onToggle(false);
+  }
+
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (list.hidden) open();
+    else close();
+  });
+  // typing a letter jumps to the first language starting with it
+  list.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      close();
+      button.focus();
+      return;
+    }
+    if (e.key.length !== 1) return;
+    const hit = [...list.children].find((b) => b.textContent.toLowerCase().startsWith(e.key.toLowerCase()));
+    if (hit) hit.focus();
+  });
+  document.addEventListener('click', (e) => {
+    if (!el.contains(e.target) && !list.contains(e.target)) close();
+  });
+
+  paint();
+  return {
+    el,
+    list, // placed by the caller where there is room for it
+    get value() {
+      return current;
+    },
+    set(v) {
+      current = v;
+      paint();
+    },
+    close,
+  };
+}

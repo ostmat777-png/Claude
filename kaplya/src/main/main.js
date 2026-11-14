@@ -896,6 +896,7 @@ function registerIpc() {
       album: String(state.album || '').slice(0, 300),
       art: /^https:\/\//i.test(String(state.art || '')) ? String(state.art) : '',
       playing: Boolean(state.playing),
+      liked: typeof state.liked === 'boolean' ? state.liked : null,
       position: Number(state.position) || 0,
       duration: Number(state.duration) || 0,
     };

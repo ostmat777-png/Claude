@@ -6,9 +6,30 @@
 import { h, clear, icon } from '../ui.js';
 import { MUSIC_SERVICES } from '../common.js';
 
+// The service's own "like" button: on the player bar (lowest on the page), named
+// "Нравится", "Like", "Сохранить в медиатеку"..., but not "Не нравится".
+const LIKE_FIND = `
+  const likeVisible = (b) => b && b.offsetParent !== null;
+  const likeLabel = (b) => [b.getAttribute('aria-label'), b.title, b.dataset && b.dataset.testid].join(' ');
+  // ("Мне нравится" has "не нравится" inside it: the "не" must be a word of its own)
+  const likeBad = /(?:^|[^а-яёa-z])не (?:нравится|рекомендовать)|dislike|thumbs.?down/i;
+  const likeGood = /нравится|like|лайк|избранн|любим|save to your library|add to liked|медиатек/i;
+  const likeButton = () => [...document.querySelectorAll('button, [role="button"]')]
+    .filter((b) => likeVisible(b) && likeGood.test(likeLabel(b)) && !likeBad.test(likeLabel(b)))
+    .sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null;
+  const likeState = (b) => {
+    if (!b) return null;
+    const p = b.getAttribute('aria-pressed') || b.getAttribute('aria-checked');
+    if (p === 'true') return true;
+    if (p === 'false') return false;
+    return /\\b(active|liked|is-liked|checked|selected)\\b/i.test(String(b.className)) ? true : null;
+  };
+`;
+
 // Read inside the service's page: what is playing, from the page's media session
 // (the same data Windows shows) and its audio or video element.
 const READ = `(() => {
+  ${LIKE_FIND}
   const els = [...document.querySelectorAll('audio, video')];
   const el = els.find((e) => !e.paused) || els.find((e) => e.currentTime > 0) || els[0] || null;
   const ms = navigator.mediaSession;
@@ -22,7 +43,23 @@ const READ = `(() => {
     playing: el ? !el.paused : Boolean(ms && ms.playbackState === 'playing'),
     position: el ? el.currentTime : 0,
     duration: el && isFinite(el.duration) ? el.duration : 0,
+    liked: window.externalAPI && externalAPI.getCurrentTrack && externalAPI.getCurrentTrack()
+      ? Boolean(externalAPI.getCurrentTrack().liked) : likeState(likeButton()),
   };
+})()`;
+
+// Press the page's own "like": the like goes to your account in that service.
+const LIKE = `(() => {
+  ${LIKE_FIND}
+  // Yandex Music's interface for players and extensions, where the page has it
+  if (window.externalAPI && typeof externalAPI.toggleLike === 'function') {
+    externalAPI.toggleLike();
+    return { how: 'api' };
+  }
+  const b = likeButton();
+  if (!b) return { how: 'none' };
+  b.click();
+  return { how: 'button' };
 })()`;
 
 // Pressing the page's own buttons where possible, so its interface stays in step.
@@ -126,6 +163,19 @@ export default {
         // the page is still loading
       }
     }
+
+    // the heart on the home tab presses the service's own "like"
+    app.musicLike = async () => {
+      const cur = current();
+      const view = cur && pages.get(cur.id);
+      if (!view) return { how: 'none' };
+      let res = { how: 'none' };
+      try {
+        res = await view.executeJavaScript(LIKE);
+      } catch {}
+      setTimeout(read, 400);
+      return { ...res, service: cur.name };
+    };
 
     api.on('webmedia:cmd', async (action, position) => {
       const cur = current();

@@ -1008,6 +1008,70 @@
   cursor: pointer;
 }
 
+/* a choice from a list, inside the island */
+.picker {
+  position: relative;
+  min-width: 0;
+}
+
+.picker-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  max-width: 180px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.picker-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+.picker-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  max-height: 170px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--card-2);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  animation: rise 0.18s var(--spring);
+}
+
+.picker-list[hidden] {
+  display: none;
+}
+
+.picker-item {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-item:hover,
+.picker-item:focus-visible {
+  background: var(--card-3);
+  outline: none;
+}
+
+.picker-item.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
 .tr-result {
   height: 120px;
   background: color-mix(in srgb, var(--accent) 7%, var(--card));

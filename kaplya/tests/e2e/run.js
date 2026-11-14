@@ -197,6 +197,9 @@ async function main() {
     // the heart: the track goes to the liked list, and stays after a restart
     await k.page.click('.player-like');
     assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'true');
+    // a program's own "like" cannot be pressed from outside: the island says so plainly
+    await until(async () => /Лайк сохранён в Капле/.test(await text(k, '#banner').catch(() => '')), 'the banner explains where the like is');
+    assert.match(await text(k, '#banner'), /вкладке «Плеер»/);
     assert.equal(await text(k, '.like-count'), '1');
     await k.page.click('.player-likes');
     await k.page.waitForSelector('.likes-list .like');
@@ -395,6 +398,10 @@ async function main() {
 <h1 id="t"></h1>
 <button aria-label="Предыдущий трек" onclick="go(-1)">⏮</button>
 <button aria-label="Следующий трек" onclick="go(1)">⏭</button>
+<div style="position:fixed;bottom:10px;left:10px">
+<button id="like" aria-label="Мне нравится" aria-pressed="false" onclick="like(this)">♡</button>
+<button aria-label="Не нравится" onclick="window.__calls.push('dislike')">👎</button>
+</div>
 <audio id="a"></audio>
 <script>
   const tracks = [['Полёт над морем', 'Северный ветер'], ['Огни города', 'Северный ветер']];
@@ -410,7 +417,10 @@ async function main() {
     document.getElementById('t').textContent = tracks[i][0];
     navigator.mediaSession.metadata = new MediaMetadata({ title: tracks[i][0], artist: tracks[i][1], album: 'Тест' });
   }
-  function go(d) { i = (i + d + tracks.length) % tracks.length; pos = 0; window.__calls.push(d > 0 ? 'next' : 'prev'); show(); }
+  const liked = new Set();
+  function paintLike() { document.getElementById('like').setAttribute('aria-pressed', String(liked.has(i))); }
+  function like() { if (liked.has(i)) liked.delete(i); else liked.add(i); window.__calls.push('like'); paintLike(); }
+  function go(d) { i = (i + d + tracks.length) % tracks.length; pos = 0; window.__calls.push(d > 0 ? 'next' : 'prev'); show(); paintLike(); }
   setInterval(() => { ticks++; if (playing) pos += 0.5; }, 500);
   window.__ticks = () => ticks;
   show();
@@ -440,6 +450,18 @@ async function main() {
     assert.ok((await inPage('window.__calls')).includes('next'));
     await k.page.click('.player-play');
     await until(async () => (await inPage('window.__calls')).filter((c) => c === 'play').length >= 2, 'play again');
+
+    // the heart presses the service's own "like" (not "dislike"): the like is in your account there
+    assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'false');
+    await k.page.click('.player-like');
+    await until(async () => (await inPage('document.getElementById("like").getAttribute("aria-pressed")')) === 'true', 'the page got the like');
+    assert.ok(!(await inPage('window.__calls')).includes('dislike'), 'not the dislike button');
+    await until(async () => /Лайк поставлен в Яндекс Музыка/.test(await text(k, '#banner').catch(() => '')), 'the banner says where the like went');
+    await sleep(1500);
+    assert.equal(await k.page.getAttribute('.player-like', 'aria-pressed'), 'true', 'the heart follows the service');
+    // liked on the page itself: the island's heart shows it too
+    await inPage('document.getElementById("like").click()');
+    await until(async () => (await k.page.getAttribute('.player-like', 'aria-pressed')) === 'false', 'the heart follows a like taken off on the page');
 
     // leave: the island folds away; the page goes on running
     await k.page.keyboard.press('Escape');
@@ -563,26 +585,40 @@ async function main() {
     assert.equal(await k.page.inputValue('.text-area'), '{\n  "a": 1\n}');
     await k.shot('text');
 
+    const choose = async (which, name) => {
+      await k.page.click(`.picker-btn[aria-label="${which}"]`);
+      await k.page.locator(`.picker-list[aria-label="${which}"] .picker-item`, { hasText: name }).click();
+    };
+    const chosen = (which) => k.page.textContent(`.picker-btn[aria-label="${which}"]`);
     // translation, right in the island: the language is guessed, the target chosen
     await k.page.fill('.text-area', 'Встречу перенесли на пятницу');
     await k.page.click('.text-bar button[data-act="translate"]');
     await k.page.waitForSelector('.tr-panel:not([hidden])');
     await until(async () => (await k.page.inputValue('.tr-result')) === 'The meeting was moved to Friday', 'translated into English');
-    assert.equal(await k.page.inputValue('select[aria-label="На какой язык"]'), 'en');
+    assert.equal(await chosen('На какой язык'), 'Английский');
     assert.match(await text(k, '.tr-note'), /Русский \(определён\) → Английский · Google/);
     await k.settle(300);
     await k.shot('text-translate');
-    // another language: translated again at once
-    await k.page.selectOption('select[aria-label="На какой язык"]', 'de');
+    // another language: the list opens inside the island, which stays open, also
+    // with the mouse right on the list
+    await k.page.click('.picker-btn[aria-label="На какой язык"]');
+    await k.page.waitForSelector('.picker-list[aria-label="На какой язык"]:not([hidden])');
+    const listBox = await k.page.locator('.picker-list[aria-label="На какой язык"]').boundingBox();
+    const islandBox = await k.page.locator('#island').boundingBox();
+    assert.ok(listBox.y + listBox.height <= islandBox.y + islandBox.height + 1, 'the list is inside the island');
+    await k.settle(300);
+    await k.shot('text-languages');
+    await k.page.locator('.picker-list[aria-label="На какой язык"] .picker-item', { hasText: 'Немецкий' }).click();
+    assert.equal(await k.mode(), 'open', 'choosing a language does not close the island');
     await until(async () => (await k.page.inputValue('.tr-result')) === '[de] Встречу перенесли на пятницу', 'translated into German');
     // swap: the translation becomes the text, the languages change places
-    await k.page.selectOption('select[aria-label="На какой язык"]', 'en');
+    await choose('На какой язык', 'Английский');
     await until(async () => (await k.page.inputValue('.tr-result')) === 'The meeting was moved to Friday', 'back to English');
     await k.page.click('.tr-bar button[title="Поменять языки местами"]');
     await until(async () => (await k.page.inputValue('.text-area:not(.tr-result)')) === 'The meeting was moved to Friday', 'the text swapped');
     await until(async () => (await k.page.inputValue('.tr-result')) === 'Встречу перенесли на пятницу', 'translated back');
-    assert.equal(await k.page.inputValue('select[aria-label="С какого языка"]'), 'en');
-    assert.equal(await k.page.inputValue('select[aria-label="На какой язык"]'), 'ru');
+    assert.equal(await chosen('С какого языка'), 'Английский');
+    assert.equal(await chosen('На какой язык'), 'Русский');
     // copy the translation
     await k.page.click('.tr-actions button[data-act="tr-copy"]');
     await until(async () => (await clipText(k)) === 'Встречу перенесли на пятницу', 'translation on the clipboard');

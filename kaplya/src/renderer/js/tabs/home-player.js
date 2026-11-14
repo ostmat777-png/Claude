@@ -235,19 +235,58 @@ export function createPlayer(app, hooks) {
   const likes = () => (Array.isArray(app.data.likes) ? app.data.likes : []);
   const isLiked = (m) => Boolean(m) && likes().some((x) => x.key === likeKey(m));
 
-  function toggleLike() {
-    const m = app.sys.media;
-    if (!m) return;
+  // the service says whether the track is liked there (music inside the island)
+  // just pressed: shown as pressed until the service's page has caught up
+  let likePending = null;
+  const shownLiked = (m) => {
+    if (m && likePending && likePending.key === likeKey(m) && Date.now() < likePending.until) {
+      if (m.liked === likePending.want) likePending = null;
+      else return likePending.want;
+    }
+    return m && typeof m.liked === 'boolean' ? m.liked : isLiked(m);
+  };
+  let likeExplained = false;
+
+  /** Keeps Kaplya's own list in step: `want` true adds the track, false takes it away. */
+  function rememberLike(m, want) {
     const key = likeKey(m);
-    const list = likes();
-    if (list.some((x) => x.key === key)) app.set('likes', list.filter((x) => x.key !== key));
-    else app.set('likes', [{ key, title: m.title, artist: m.artist, album: m.album, app: m.app, at: Date.now() }, ...list].slice(0, 500));
-    paintLike();
-    if (stage === 'likes') paintStage();
+    const list = likes().filter((x) => x.key !== key);
+    app.set('likes', want ? [{ key, title: m.title, artist: m.artist, album: m.album, app: m.app, at: Date.now() }, ...list].slice(0, 500) : list);
   }
 
-  function paintLike() {
-    const liked = isLiked(app.sys.media);
+  async function toggleLike() {
+    const m = app.sys.media;
+    if (!m) return;
+    const want = !shownLiked(m);
+    likePending = { key: likeKey(m), want, until: Date.now() + 2500 };
+    rememberLike(m, want);
+    paintLike(want);
+    if (stage === 'likes') paintStage();
+    if (String(m.app).startsWith('kaplya:web') && app.musicLike) {
+      // music inside the island: press the service's own "like", into your account
+      const r = await app.musicLike();
+      if (r && r.how !== 'none') {
+        app.toast({ type: 'info', icon: 'heart', title: want ? `Лайк поставлен в ${r.service}` : `Лайк снят в ${r.service}`, text: m.title });
+      } else {
+        app.toast({ type: 'error', title: 'Не нашёл кнопку «Нравится» на странице сервиса', text: 'Трек сохранён в списке Капли', hold: 6000 });
+      }
+      return;
+    }
+    if (want && !likeExplained) {
+      // A program or a browser: Windows gives other programs no "like" command.
+      likeExplained = true;
+      app.toast({
+        type: 'info',
+        icon: 'heart',
+        title: 'Лайк сохранён в Капле',
+        text: `В ${appLabel(m.app) || 'приложении'} его не поставить: Windows не даёт программам такой команды. Включите музыку во вкладке «Плеер», и лайк будет ставиться в самом сервисе.`,
+        hold: 9000,
+      });
+    }
+  }
+
+  function paintLike(override) {
+    const liked = typeof override === 'boolean' ? override : shownLiked(app.sys.media);
     btnLike.classList.toggle('on', liked);
     btnLike.title = liked ? 'Убрать из понравившихся' : 'Нравится: запомнить этот трек';
     btnLike.setAttribute('aria-pressed', String(liked));

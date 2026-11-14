@@ -1,7 +1,7 @@
 // Текст: fix the keyboard layout, change case, tidy up, encode. One click, and the
 // result is already on the clipboard.
 
-import { h, clear, icon } from '../ui.js';
+import { h, clear, icon, picker } from '../ui.js';
 import { TOOLS, stats } from '../../shared/texttools.mjs';
 import { LANGUAGES, languageName, guessLanguage } from '../../shared/languages.mjs';
 
@@ -116,17 +116,19 @@ export default {
 
     // ---------------------------------------------------------------- translation, right here
     const tr = { from: 'auto', to: '', busy: false, seq: 0 };
-    const fromSel = h('select', { class: 'field tr-lang', 'aria-label': 'С какого языка' },
-      h('option', { value: 'auto', text: 'Определить язык' }), LANGUAGES.map(([c, n]) => h('option', { value: c, text: n })));
-    const toSel = h('select', { class: 'field tr-lang', 'aria-label': 'На какой язык' }, LANGUAGES.map(([c, n]) => h('option', { value: c, text: n })));
+    // the language lists open inside the island, under the bar
+    const relayout = () => app.relayout();
+    const fromSel = picker({ label: 'С какого языка', options: [['auto', 'Определить язык'], ...LANGUAGES], value: 'auto', onChange: () => runTranslate(), onToggle: (open) => { if (open) toSel.close(); relayout(); } });
+    const toSel = picker({ label: 'На какой язык', options: LANGUAGES, value: 'en', onChange: () => runTranslate(), onToggle: (open) => { if (open) fromSel.close(); relayout(); } });
     const swap = h('button', { class: 'ghost', title: 'Поменять языки местами', onclick: () => swapLangs() }, icon('arrow-left-right', 15));
     const result = h('textarea', { class: 'text-area tr-result', readOnly: true, placeholder: 'Здесь появится перевод', spellcheck: false });
     const trNote = h('span', { class: 'faint tr-note' });
     const panel = h('div', { class: 'tr-panel', hidden: true },
       h('div', { class: 'tr-bar' },
-        icon('languages', 15), fromSel, swap, toSel,
+        icon('languages', 15), fromSel.el, swap, toSel.el,
         h('span', { class: 'grow' }),
         h('button', { class: 'ghost', title: 'Закрыть перевод', onclick: () => closeTranslate() }, icon('x', 15))),
+      fromSel.list, toSel.list,
       result,
       h('div', { class: 'tr-actions' },
         h('button', {
@@ -146,7 +148,7 @@ export default {
             if (!result.value) return;
             setText(result.value);
             const was = fromSel.value === 'auto' ? guessLanguage(area.value) : fromSel.value;
-            toSel.value = was && was !== toSel.value ? was : toSel.value;
+            toSel.set(was && was !== toSel.value ? was : toSel.value);
             result.value = '';
             trNote.textContent = '';
           },
@@ -162,10 +164,10 @@ export default {
       if (!area.value.trim()) return say('Сначала вставьте текст', 'error');
       if (panel.hidden) {
         const saved = app.settings.translate || {};
-        fromSel.value = 'auto';
+        fromSel.set('auto');
         // the last language chosen, unless the text is already in it
         const guess = guessLanguage(area.value);
-        toSel.value = saved.to && saved.to !== guess ? saved.to : defaultTarget(area.value);
+        toSel.set(saved.to && saved.to !== guess ? saved.to : defaultTarget(area.value));
         panel.hidden = false;
         root.classList.add('translating');
       }
@@ -175,6 +177,8 @@ export default {
     }
 
     function closeTranslate() {
+      fromSel.close();
+      toSel.close();
       panel.hidden = true;
       root.classList.remove('translating');
       app.relayout();
@@ -182,8 +186,8 @@ export default {
 
     function swapLangs() {
       const from = fromSel.value === 'auto' ? guessLanguage(area.value) || 'en' : fromSel.value;
-      fromSel.value = toSel.value;
-      toSel.value = from;
+      fromSel.set(toSel.value);
+      toSel.set(from);
       if (result.value) {
         setText(result.value);
         result.value = '';
@@ -212,8 +216,6 @@ export default {
       app.set('settings.translate', { to: toSel.value });
     }
 
-    fromSel.addEventListener('change', runTranslate);
-    toSel.addEventListener('change', runTranslate);
     // retranslate a moment after typing stops
     let typingTimer = 0;
     area.addEventListener('input', () => {

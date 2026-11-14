@@ -61,6 +61,7 @@ class SystemWatch extends EventEmitter {
       canPrev: true,
       canNext: true,
       canSeek: Boolean(s.duration),
+      liked: typeof s.liked === 'boolean' ? s.liked : null,
       thumbUrl: w.cover || null,
       thumbNote: w.cover ? '' : 'none',
     };
@@ -179,6 +180,7 @@ class SystemWatch extends EventEmitter {
       canPrev: raw.canPrev !== false,
       canNext: raw.canNext !== false,
       canSeek: Boolean(raw.canSeek),
+      liked: typeof raw.liked === 'boolean' ? raw.liked : null, // known only for the island's own service
     };
 
     let coverChanged = false;
@@ -216,7 +218,7 @@ class SystemWatch extends EventEmitter {
     const prev = this.media;
     const trackChanged = !prev || prev.key !== next.key;
     const stateChanged = trackChanged || prev.playing !== next.playing || prev.duration !== next.duration ||
-      prev.canSeek !== next.canSeek || Math.abs((prev.position + (prev.playing ? (next.at - prev.at) / 1000 : 0)) - next.position) > 1.5;
+      prev.canSeek !== next.canSeek || prev.liked !== next.liked || Math.abs((prev.position + (prev.playing ? (next.at - prev.at) / 1000 : 0)) - next.position) > 1.5;
     this.media = next;
     if (stateChanged || coverChanged) {
       // What was already playing when the app started is not news.
